@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const { deleteFirebaseUser } = require('../utils/firebaseUtils');
-const minioService = require('./minioService');
+const fileStorageService = require('./fileStorageService');
 
 /**
  * Registration service to handle user registration with data integrity
@@ -74,7 +74,7 @@ class RegistrationService {
       // Step 7: Upload document to MinIO with userId in metadata (after user creation)
       if (documentBuffer && documentMetadata) {
         try {
-          documentKey = await minioService.uploadCompanyDocument(
+          documentKey = await fileStorageService.uploadCompanyDocument(
             documentBuffer,
             documentMetadata.originalname,
             documentMetadata.mimetype,
@@ -108,7 +108,7 @@ class RegistrationService {
       // Clean up uploaded file from MinIO if exists
       if (documentKey) {
         try {
-          await minioService.deleteFile(minioService.BUCKETS.DOCUMENTS, documentKey);
+          await fileStorageService.deleteFile('documents', documentKey);
           console.log(`Cleaned up MinIO file: ${documentKey}`);
         } catch (cleanupError) {
           console.error('Error cleaning up MinIO file:', cleanupError);

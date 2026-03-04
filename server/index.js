@@ -8,7 +8,8 @@ dotenv.config();
 
 // Import database AFTER environment variables are loaded
 const db = require('./config/database');
-const minioService = require('./services/minioService');
+const fileStorageService = require('./services/fileStorageService');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -35,8 +36,12 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY && process.env.FIREBASE_SERVICE_ACC
   console.log('Firebase service account key not configured. Firebase features will be disabled.');
 }
 
-// Make database available globally for routes
+// Make database and file storage available globally for routes
 app.locals.db = db;
+app.locals.fileStorage = fileStorageService;
+
+// Serve uploaded files statically
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Basic routes
 app.get('/', (req, res) => {
@@ -56,9 +61,11 @@ app.get('/api/health', (req, res) => {
 const authRoutes = require('./routes/auth');
 const ordersRoutes = require('./routes/orders');
 const billingRoutes = require('./routes/billing');
+const driversRoutes = require('./routes/drivers');
 app.use('/api/auth', authRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/billing', billingRoutes);
+app.use('/api/drivers', driversRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -71,24 +78,18 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// Initialize MinIO buckets and start server
+// Initialize file storage and start server
 async function startServer() {
   try {
-    // Initialize MinIO buckets
-    await minioService.initializeBuckets();
-    console.log('MinIO buckets initialized');
-    
-    // Start server
+    await fileStorageService.initializeBuckets();
+
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
     });
   } catch (error) {
     console.error('Error starting server:', error);
-    console.log('Server will start without MinIO. Please configure MinIO connection.');
-    
-    // Start server anyway (graceful degradation)
     app.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT} (MinIO unavailable)`);
+      console.log(`Server is running on port ${PORT}`);
     });
   }
 }

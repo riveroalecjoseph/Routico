@@ -8,7 +8,7 @@ const { requireAdmin, requireAuth, requireBusinessOwner, requireBusinessOwnerOrI
 const RegistrationService = require('../services/registrationService');
 const SubscriptionService = require('../services/subscriptionService');
 const BillingStatementService = require('../services/billingStatementService');
-const minioService = require('../services/minioService');
+const fileStorageService = require('../services/fileStorageService');
 
 // Database will be accessed through req.app.locals.db
 
@@ -664,7 +664,7 @@ router.get('/document/:userId', requireAdmin, async (req, res) => {
     console.log(`Found user: ${full_name} (${userId})`);
 
     // Find the user's document in MinIO by userId metadata
-    const objectKey = await minioService.findCompanyDocumentByUserId(userId);
+    const objectKey = await fileStorageService.findCompanyDocumentByUserId(userId);
     
     if (!objectKey) {
       console.log(`No document found in MinIO for userId: ${userId}`);
@@ -678,9 +678,9 @@ router.get('/document/:userId', requireAdmin, async (req, res) => {
 
     // Download file from MinIO and stream to client
     try {
-      const fileStream = await minioService.downloadCompanyDocument(objectKey);
-      const metadata = await minioService.getFileMetadata(
-        minioService.BUCKETS.DOCUMENTS,
+      const fileStream = await fileStorageService.downloadCompanyDocument(objectKey);
+      const metadata = await fileStorageService.getFileMetadata(
+        'documents',
         objectKey
       );
       
@@ -929,7 +929,7 @@ router.post('/subscription/payment-proof', requireBusinessOwnerOrInactive, uploa
     }
     
     // Upload payment proof to MinIO
-    const objectKey = await minioService.uploadPaymentProof(
+    const objectKey = await fileStorageService.uploadPaymentProof(
       req.file.buffer,
       req.file.originalname,
       req.file.mimetype,
@@ -1280,7 +1280,7 @@ router.post('/billing-statements/:statementId/payment-proof', requireBusinessOwn
     }
     
     // Upload payment proof to MinIO
-    const objectKey = await minioService.uploadPaymentProof(
+    const objectKey = await fileStorageService.uploadPaymentProof(
       req.file.buffer,
       req.file.originalname,
       req.file.mimetype,
@@ -1554,9 +1554,9 @@ router.get('/admin/billing-statements/:statementId/payment-proof', requireAdmin,
     
     // Download file from MinIO and stream to client
     try {
-      const fileStream = await minioService.downloadPaymentProof(statement.payment_proof_path);
-      const metadata = await minioService.getFileMetadata(
-        minioService.BUCKETS.PAYMENT_PROOFS,
+      const fileStream = await fileStorageService.downloadPaymentProof(statement.payment_proof_path);
+      const metadata = await fileStorageService.getFileMetadata(
+        'payments',
         statement.payment_proof_path
       );
       

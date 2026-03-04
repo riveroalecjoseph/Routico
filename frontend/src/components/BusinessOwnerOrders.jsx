@@ -42,9 +42,80 @@ const BusinessOwnerOrders = () => {
   const [deleting, setDeleting] = useState(false); // for confirmation
   const [editLoading, setEditLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [availableDrivers, setAvailableDrivers] = useState([]);
+  const [assigningDriver, setAssigningDriver] = useState(false);
+  const [updatingStatus, setUpdatingStatus] = useState(false);
   // Helper to update orders in-place
   const updateOrderInState = updated => setOrders(orders => orders.map(o => o.order_id === updated.order_id ? updated : o));
   const removeOrderFromState = id => setOrders(orders => orders.filter(o => o.order_id !== id));
+
+  // Fetch available drivers for assignment
+  const fetchDrivers = async () => {
+    if (!user) return;
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch('http://localhost:3001/api/drivers', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableDrivers(data.filter(d => d.status === 'active'));
+      }
+    } catch (err) {
+      console.error('Failed to fetch drivers:', err);
+    }
+  };
+
+  // Assign driver to order
+  const handleAssignDriver = async (orderId, driverId) => {
+    setAssigningDriver(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch(`http://localhost:3001/api/orders/${orderId}/assign`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ driverId: driverId || null })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        updateOrderInState(updated);
+        setSelectedOrder(updated);
+        toast.success(driverId ? 'Driver assigned successfully' : 'Driver unassigned');
+      } else {
+        toast.error('Failed to assign driver');
+      }
+    } catch (err) {
+      toast.error('Failed to assign driver');
+    } finally {
+      setAssigningDriver(false);
+    }
+  };
+
+  // Update order status
+  const handleStatusChange = async (orderId, newStatus) => {
+    setUpdatingStatus(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch(`http://localhost:3001/api/orders/${orderId}/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        updateOrderInState(updated);
+        setSelectedOrder(updated);
+        toast.success(`Status updated to ${newStatus}`);
+      } else {
+        const err = await res.json();
+        toast.error(err.error || 'Failed to update status');
+      }
+    } catch (err) {
+      toast.error('Failed to update status');
+    } finally {
+      setUpdatingStatus(false);
+    }
+  };
 
   const editPickupInputRef = useRef(null);
   const editDropoffInputRef = useRef(null);
@@ -186,6 +257,7 @@ const BusinessOwnerOrders = () => {
       }
     };
     fetchOrders();
+    fetchDrivers();
   }, [user]);
 
   const initializeGoogleMaps = () => {
@@ -535,9 +607,11 @@ const BusinessOwnerOrders = () => {
       pending: 'bg-yellow-900 text-yellow-200',
       assigned: 'bg-blue-900 text-blue-200',
       confirmed: 'bg-blue-900 text-blue-200',
+      in_transit: 'bg-purple-900 text-purple-200',
       'in-transit': 'bg-purple-900 text-purple-200',
       picked_up: 'bg-purple-900 text-purple-200',
-      delivered: 'bg-green-900 text-green-200',
+      delivered: 'bg-teal-900 text-teal-200',
+      completed: 'bg-green-900 text-green-200',
       cancelled: 'bg-red-900 text-red-200'
     };
     return colors[status?.toLowerCase()] || 'bg-gray-900 text-gray-200';
@@ -664,12 +738,12 @@ const BusinessOwnerOrders = () => {
                 <div className="grid grid-cols-1 gap-4">
                   {previousMap[dateStr].map(order => (
                     <div
-                      key={order.id}
-                      className={`bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-gray-500 transition-colors cursor-pointer group ${(selectedOrder && selectedOrder.id === order.id) ? 'ring-2 ring-gray-400' : ''}`}
+                      key={order.order_id}
+                      className={`bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-gray-500 transition-colors cursor-pointer group ${(selectedOrder && selectedOrder.order_id === order.order_id) ? 'ring-2 ring-gray-400' : ''}`}
                       onClick={() => !showCreateForm && setSelectedOrder(order)}
                       tabIndex={0}
                       role="button"
-                      aria-label={`View Order ${order.id}`}
+                      aria-label={`View Order ${order.order_id}`}
                     >
                       {/* order card code unchanged */}
                       <div className="flex justify-between items-start">
@@ -708,7 +782,7 @@ const BusinessOwnerOrders = () => {
                           </div>
                         </div>
                         <button
-                          onClick={e => { e.stopPropagation(); setSelectedOrder(selectedOrder?.id === order.id ? null : order); }}
+                          onClick={e => { e.stopPropagation(); setSelectedOrder(selectedOrder?.order_id === order.order_id ? null : order); }}
                           className="ml-4 text-gray-300 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
                           tabIndex={-1}
                         >
@@ -730,12 +804,12 @@ const BusinessOwnerOrders = () => {
             <div className="grid grid-cols-1 gap-4">
               {todayOrders.map(order => (
                 <div
-                  key={order.id}
-                  className={`bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-blue-500 transition-colors cursor-pointer group ${(selectedOrder && selectedOrder.id === order.id) ? 'ring-2 ring-blue-400' : ''}`}
+                  key={order.order_id}
+                  className={`bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-blue-500 transition-colors cursor-pointer group ${(selectedOrder && selectedOrder.order_id === order.order_id) ? 'ring-2 ring-blue-400' : ''}`}
                   onClick={() => !showCreateForm && setSelectedOrder(order)}
                   tabIndex={0}
                   role="button"
-                  aria-label={`View Order ${order.id}`}
+                  aria-label={`View Order ${order.order_id}`}
                 >
                   {/* order card code unchanged */}
                   <div className="flex justify-between items-start">
@@ -774,7 +848,7 @@ const BusinessOwnerOrders = () => {
                       </div>
                     </div>
                     <button
-                      onClick={e => { e.stopPropagation(); setSelectedOrder(selectedOrder?.id === order.id ? null : order); }}
+                      onClick={e => { e.stopPropagation(); setSelectedOrder(selectedOrder?.order_id === order.order_id ? null : order); }}
                       className="ml-4 text-blue-400 hover:text-blue-300 opacity-0 group-hover:opacity-100 transition-opacity"
                       tabIndex={-1}
                     >
@@ -794,12 +868,12 @@ const BusinessOwnerOrders = () => {
             <div className="grid grid-cols-1 gap-4">
               {upcomingMap[dateStr].map(order => (
                 <div
-                  key={order.id}
-                  className={`bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-yellow-400 transition-colors cursor-pointer group ${(selectedOrder && selectedOrder.id === order.id) ? 'ring-2 ring-yellow-400' : ''}`}
+                  key={order.order_id}
+                  className={`bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-yellow-400 transition-colors cursor-pointer group ${(selectedOrder && selectedOrder.order_id === order.order_id) ? 'ring-2 ring-yellow-400' : ''}`}
                   onClick={() => !showCreateForm && setSelectedOrder(order)}
                   tabIndex={0}
                   role="button"
-                  aria-label={`View Order ${order.id}`}
+                  aria-label={`View Order ${order.order_id}`}
                 >
                   {/* order card code unchanged */}
                   <div className="flex justify-between items-start">
@@ -838,7 +912,7 @@ const BusinessOwnerOrders = () => {
                       </div>
                     </div>
                     <button
-                      onClick={e => { e.stopPropagation(); setSelectedOrder(selectedOrder?.id === order.id ? null : order); }}
+                      onClick={e => { e.stopPropagation(); setSelectedOrder(selectedOrder?.order_id === order.order_id ? null : order); }}
                       className="ml-4 text-yellow-400 hover:text-yellow-300 opacity-0 group-hover:opacity-100 transition-opacity"
                       tabIndex={-1}
                     >
@@ -1207,7 +1281,46 @@ const BusinessOwnerOrders = () => {
                     onClick={() => setDeleting(true)}
                   >Delete</button>
                 </div>
-                <h2 className="text-2xl font-bold text-white mb-2">Order Detail — {selectedOrder.id}</h2>
+                <h2 className="text-2xl font-bold text-white mb-2">Order #{selectedOrder.order_id}</h2>
+
+                {/* Driver Assignment */}
+                <div className="mb-4 p-3 bg-gray-800 rounded-lg border border-gray-700">
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Assign Driver</label>
+                  <select
+                    className="w-full px-2 py-1.5 rounded border border-gray-600 bg-gray-700 text-white text-sm"
+                    value={selectedOrder.assigned_driver_id || ''}
+                    onChange={(e) => handleAssignDriver(selectedOrder.order_id, e.target.value ? parseInt(e.target.value) : null)}
+                    disabled={assigningDriver}
+                  >
+                    <option value="">-- No Driver --</option>
+                    {availableDrivers.map(d => (
+                      <option key={d.driver_id} value={d.driver_id}>
+                        {d.first_name} {d.last_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Status Update */}
+                <div className="mb-4 p-3 bg-gray-800 rounded-lg border border-gray-700">
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Update Status</label>
+                  <div className="flex flex-wrap gap-2">
+                    {['pending', 'assigned', 'in_transit', 'delivered', 'completed', 'cancelled'].map(s => (
+                      <button
+                        key={s}
+                        className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+                          selectedOrder.order_status === s
+                            ? 'bg-blue-600 text-white ring-2 ring-blue-400'
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        }`}
+                        onClick={() => handleStatusChange(selectedOrder.order_id, s)}
+                        disabled={updatingStatus || selectedOrder.order_status === s}
+                      >
+                        {s.replace('_', ' ')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 gap-2 text-gray-200 mb-6">
                   <div><b>Status:</b> <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(selectedOrder.order_status)}`}>{selectedOrder.order_status}</span></div>
                   <div><b>Customer:</b> {selectedOrder.customer_name}</div>

@@ -20,14 +20,16 @@ router.get('/', requireAuth, async (req, res) => {
 
     const ownerId = ownerResult[0].owner_id;
 
-    // Get orders with customer information via JOIN
+    // Get orders with customer and driver information via JOIN
     const [orders] = await db.query(
-      `SELECT 
+      `SELECT
         o.*,
         c.company_name as customer_name,
-        c.contact_number as customer_phone
+        c.contact_number as customer_phone,
+        CONCAT(d.first_name, ' ', d.last_name) as driver_name
       FROM orders o
       LEFT JOIN customers c ON o.customer_id = c.customer_id
+      LEFT JOIN drivers d ON o.assigned_driver_id = d.driver_id
       WHERE o.business_owner_id = ?
       ORDER BY o.order_created_at DESC`,
       [ownerId]
@@ -180,25 +182,51 @@ router.put('/:orderId/status', requireAuth, async (req, res) => {
     const orderId = req.params.orderId;
     const { status } = req.body;
 
-    // Verify order belongs to the user
+    const validStatuses = ['pending', 'assigned', 'in_transit', 'delivered', 'completed', 'cancelled'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
+    }
+
+    // Get owner_id for this user
+    const [ownerResult] = await db.query(
+      'SELECT owner_id FROM businessowners WHERE user_id = ?',
+      [userId]
+    );
+    if (ownerResult.length === 0) {
+      return res.status(403).json({ error: 'No owner profile' });
+    }
+    const ownerId = ownerResult[0].owner_id;
+
+    // Verify order belongs to the owner
     const [orders] = await db.query(
       `SELECT * FROM orders WHERE order_id = ? AND business_owner_id = ?`,
-      [orderId, userId]
+      [orderId, ownerId]
     );
 
     if (orders.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    // Update status
+    // Update order_status (correct column name)
     await db.query(
-      `UPDATE Orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE order_id = ?`,
+      `UPDATE orders SET order_status = ?, order_updated_at = NOW() WHERE order_id = ?`,
       [status, orderId]
     );
 
-    // Fetch updated order
+    // Log status change to deliverystatuslogs
+    await db.query(
+      `INSERT INTO deliverystatuslogs (order_id, status) VALUES (?, ?)`,
+      [orderId, status]
+    );
+
+    // Fetch updated order with joins
     const [updatedOrders] = await db.query(
-      `SELECT * FROM orders WHERE order_id = ?`,
+      `SELECT o.*, c.company_name as customer_name, c.contact_number as customer_phone,
+              CONCAT(d.first_name, ' ', d.last_name) as driver_name
+       FROM orders o
+       LEFT JOIN customers c ON o.customer_id = c.customer_id
+       LEFT JOIN drivers d ON o.assigned_driver_id = d.driver_id
+       WHERE o.order_id = ?`,
       [orderId]
     );
 
@@ -206,6 +234,135 @@ router.put('/:orderId/status', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('Error updating order status:', error);
     res.status(500).json({ error: 'Failed to update order status' });
+  }
+});
+
+// Assign driver to order
+router.put('/:orderId/assign', requireAuth, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const userId = req.user.user_id;
+    const orderId = req.params.orderId;
+    const { driverId } = req.body;
+
+    const [ownerResult] = await db.query(
+      'SELECT owner_id FROM businessowners WHERE user_id = ?',
+      [userId]
+    );
+    if (ownerResult.length === 0) {
+      return res.status(403).json({ error: 'No owner profile' });
+    }
+    const ownerId = ownerResult[0].owner_id;
+
+    // Verify order belongs to owner
+    const [orderRows] = await db.query(
+      'SELECT * FROM orders WHERE order_id = ? AND business_owner_id = ?',
+      [orderId, ownerId]
+    );
+    if (orderRows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // Verify driver belongs to same owner
+    if (driverId) {
+      const [driverRows] = await db.query(
+        'SELECT * FROM drivers WHERE driver_id = ? AND owner_id = ?',
+        [driverId, ownerId]
+      );
+      if (driverRows.length === 0) {
+        return res.status(404).json({ error: 'Driver not found' });
+      }
+    }
+
+    // Assign driver and update status to 'assigned' if currently 'pending'
+    const newStatus = orderRows[0].order_status === 'pending' && driverId ? 'assigned' : orderRows[0].order_status;
+
+    await db.query(
+      `UPDATE orders SET assigned_driver_id = ?, order_status = ?, order_updated_at = NOW() WHERE order_id = ?`,
+      [driverId || null, newStatus, orderId]
+    );
+
+    // Log if status changed
+    if (newStatus !== orderRows[0].order_status) {
+      await db.query(
+        `INSERT INTO deliverystatuslogs (order_id, status) VALUES (?, ?)`,
+        [orderId, newStatus]
+      );
+    }
+
+    // Fetch updated order
+    const [updatedOrders] = await db.query(
+      `SELECT o.*, c.company_name as customer_name, c.contact_number as customer_phone,
+              CONCAT(d.first_name, ' ', d.last_name) as driver_name
+       FROM orders o
+       LEFT JOIN customers c ON o.customer_id = c.customer_id
+       LEFT JOIN drivers d ON o.assigned_driver_id = d.driver_id
+       WHERE o.order_id = ?`,
+      [orderId]
+    );
+
+    res.json(updatedOrders[0]);
+  } catch (error) {
+    console.error('Error assigning driver:', error);
+    res.status(500).json({ error: 'Failed to assign driver' });
+  }
+});
+
+// Get order analytics for business owner
+router.get('/analytics/summary', requireAuth, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const userId = req.user.user_id;
+
+    const [ownerResult] = await db.query(
+      'SELECT owner_id FROM businessowners WHERE user_id = ?',
+      [userId]
+    );
+    if (ownerResult.length === 0) {
+      return res.json({ monthly: [], statusCounts: {}, topCustomers: [] });
+    }
+    const ownerId = ownerResult[0].owner_id;
+
+    // Orders per month (last 6 months)
+    const [monthly] = await db.query(
+      `SELECT
+        DATE_FORMAT(order_created_at, '%Y-%m') as month,
+        COUNT(*) as order_count,
+        COALESCE(SUM(delivery_fee), 0) as revenue,
+        SUM(CASE WHEN order_status = 'completed' THEN 1 ELSE 0 END) as completed
+      FROM orders
+      WHERE business_owner_id = ? AND order_created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
+      GROUP BY DATE_FORMAT(order_created_at, '%Y-%m')
+      ORDER BY month ASC`,
+      [ownerId]
+    );
+
+    // Status breakdown
+    const [statusRows] = await db.query(
+      `SELECT order_status, COUNT(*) as count
+       FROM orders WHERE business_owner_id = ?
+       GROUP BY order_status`,
+      [ownerId]
+    );
+    const statusCounts = {};
+    statusRows.forEach(r => { statusCounts[r.order_status] = r.count; });
+
+    // Top customers by order count
+    const [topCustomers] = await db.query(
+      `SELECT c.company_name, COUNT(*) as order_count, COALESCE(SUM(o.delivery_fee), 0) as total_revenue
+       FROM orders o
+       LEFT JOIN customers c ON o.customer_id = c.customer_id
+       WHERE o.business_owner_id = ?
+       GROUP BY o.customer_id, c.company_name
+       ORDER BY order_count DESC
+       LIMIT 5`,
+      [ownerId]
+    );
+
+    res.json({ monthly, statusCounts, topCustomers });
+  } catch (error) {
+    console.error('Error fetching analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch analytics' });
   }
 });
 

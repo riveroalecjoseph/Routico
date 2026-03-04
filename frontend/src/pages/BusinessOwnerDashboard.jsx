@@ -87,16 +87,19 @@ const BusinessOwnerDashboard = () => {
         statsData = await statsResponse.json();
       }
 
-      // Load active drivers from localStorage (user-specific key)
-      const storageKey = user?.uid ? `routicoDrivers_${user.uid}` : 'routicoDrivers';
-      const driversJson = localStorage.getItem(storageKey);
-      if (driversJson) {
+      // Fetch active drivers count from API
+      if (user) {
         try {
-          const drivers = JSON.parse(driversJson);
-          const activeDriverCount = drivers.filter(driver => driver.status === 'Active').length;
-          statsData.activeDrivers = activeDriverCount;
+          const token = await user.getIdToken();
+          const driversResponse = await fetch('http://localhost:3001/api/drivers', {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (driversResponse.ok) {
+            const driversData = await driversResponse.json();
+            statsData.activeDrivers = driversData.filter(d => d.status === 'active').length;
+          }
         } catch (e) {
-          console.error('Error parsing drivers from localStorage:', e);
+          console.error('Error fetching drivers:', e);
         }
       }
 

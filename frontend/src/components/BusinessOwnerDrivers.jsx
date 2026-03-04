@@ -21,39 +21,36 @@ const BusinessOwnerDrivers = () => {
     ridesCompleted: ''
   });
 
-  const storageKey = user?.uid ? `routicoDrivers_${user.uid}` : 'routicoDrivers';
-
   useEffect(() => {
-    fetchDrivers();
+    if (user) {
+      fetchDrivers();
+    }
   }, [user]);
+
+  const getAuthHeaders = async () => {
+    const token = await user.getIdToken();
+    return { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+  };
+
+  const dispatchDriversUpdated = (updatedDrivers) => {
+    window.dispatchEvent(new CustomEvent('driversUpdated', { detail: { drivers: updatedDrivers } }));
+  };
 
   const fetchDrivers = async () => {
     setLoading(true);
     try {
-      // Load drivers from localStorage (user-specific key)
-      const savedDrivers = localStorage.getItem(storageKey);
-      if (savedDrivers) {
-        setDrivers(JSON.parse(savedDrivers));
-      } else {
-        setDrivers([]);
-      }
+      const headers = await getAuthHeaders();
+      const response = await fetch('http://localhost:3001/api/drivers', { headers });
+      if (!response.ok) throw new Error('Failed to fetch drivers');
+      const data = await response.json();
+      setDrivers(data);
+      dispatchDriversUpdated(data);
       setError(null);
     } catch (err) {
       setError('Failed to load drivers');
       console.error(err);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const saveDrivers = (updatedDrivers) => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(updatedDrivers));
-      // Dispatch event to notify other components of driver updates
-      window.dispatchEvent(new CustomEvent('driversUpdated', { detail: { drivers: updatedDrivers } }));
-      console.log('Drivers saved to localStorage');
-    } catch (err) {
-      console.error('Failed to save drivers:', err);
     }
   };
 
@@ -72,35 +69,49 @@ const BusinessOwnerDrivers = () => {
     }
 
     try {
+      const headers = await getAuthHeaders();
+
       if (editingId) {
         // Update existing driver
-        const updatedDrivers = drivers.map(driver =>
-          driver.id === editingId
-            ? { ...driver, ...formData }
-            : driver
-        );
+        const response = await fetch(`http://localhost:3001/api/drivers/${editingId}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({
+            firstName: formData.firstName,
+            lastName: formData.lastName,
+            email: formData.email,
+            phone: formData.phone,
+            licenseNumber: formData.licenseNumber,
+            licenseExpiry: formData.licenseExpiry || null,
+            status: formData.status || 'active'
+          })
+        });
+        if (!response.ok) throw new Error('Failed to update driver');
+        const updated = await response.json();
+        const updatedDrivers = drivers.map(d => d.driver_id === editingId ? updated : d);
         setDrivers(updatedDrivers);
-        saveDrivers(updatedDrivers);
-        console.log('Updated driver:', editingId);
+        dispatchDriversUpdated(updatedDrivers);
+        toast.success('Driver updated successfully');
       } else {
-        // Create new driver object
-        const newDriver = {
-          id: drivers.length > 0 ? Math.max(...drivers.map(d => d.id)) + 1 : 1,
-          firstName: formData.firstName,
-          lastName: formData.lastName,
-          email: formData.email,
-          phone: formData.phone,
-          licenseNumber: formData.licenseNumber,
-          licenseExpiry: formData.licenseExpiry,
-          status: 'Active',
-          ridesCompleted: 0
-        };
-
-        // Add to local state
+        // Create new driver
+        const response = await fetch('http://localhost:3001/api/drivers', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            firstName: formData.firstName,
+            lastName: formData.lastName,
+            email: formData.email,
+            phone: formData.phone,
+            licenseNumber: formData.licenseNumber,
+            licenseExpiry: formData.licenseExpiry || null
+          })
+        });
+        if (!response.ok) throw new Error('Failed to create driver');
+        const newDriver = await response.json();
         const updatedDrivers = [...drivers, newDriver];
         setDrivers(updatedDrivers);
-        saveDrivers(updatedDrivers);
-        console.log('Added driver:', newDriver);
+        dispatchDriversUpdated(updatedDrivers);
+        toast.success('Driver added successfully');
       }
 
       // Clear form and close
@@ -110,7 +121,8 @@ const BusinessOwnerDrivers = () => {
         email: '',
         phone: '',
         licenseNumber: '',
-        licenseExpiry: ''
+        licenseExpiry: '',
+        ridesCompleted: ''
       });
       setShowAddDriver(false);
       setEditingId(null);
@@ -122,15 +134,15 @@ const BusinessOwnerDrivers = () => {
 
   const handleEditDriver = (driver) => {
     setFormData({
-      firstName: driver.firstName,
-      lastName: driver.lastName,
-      email: driver.email,
-      phone: driver.phone,
-      licenseNumber: driver.licenseNumber,
-      licenseExpiry: driver.licenseExpiry,
-      ridesCompleted: driver.ridesCompleted
+      firstName: driver.first_name,
+      lastName: driver.last_name,
+      email: driver.email || '',
+      phone: driver.phone || '',
+      licenseNumber: driver.license_number || '',
+      licenseExpiry: driver.license_expiry ? driver.license_expiry.split('T')[0] : '',
+      ridesCompleted: driver.rides_completed || 0
     });
-    setEditingId(driver.id);
+    setEditingId(driver.driver_id);
     setShowAddDriver(true);
   };
 
@@ -150,34 +162,67 @@ const BusinessOwnerDrivers = () => {
 
   const handleDeactivateDriver = async (id) => {
     if (await confirm('Are you sure you want to remove this driver?')) {
-      // Remove from local state
-      const updatedDrivers = drivers.filter(driver => driver.id !== id);
-      setDrivers(updatedDrivers);
-      
-      // Save to localStorage
-      saveDrivers(updatedDrivers);
-      
-      console.log('Removed driver:', id);
+      try {
+        const headers = await getAuthHeaders();
+        const response = await fetch(`http://localhost:3001/api/drivers/${id}`, {
+          method: 'DELETE',
+          headers
+        });
+        if (!response.ok) throw new Error('Failed to delete driver');
+        const updatedDrivers = drivers.filter(driver => driver.driver_id !== id);
+        setDrivers(updatedDrivers);
+        dispatchDriversUpdated(updatedDrivers);
+        toast.success('Driver removed successfully');
+      } catch (err) {
+        toast.error('Failed to remove driver');
+        console.error(err);
+      }
     }
   };
 
-  const statusOptions = ['Active', 'On Leave', 'Sick Leave', 'Inactive'];
+  // Map DB status values to display labels
+  const statusDisplayMap = {
+    'active': 'Active',
+    'on_leave': 'On Leave',
+    'sick_leave': 'Sick Leave',
+    'inactive': 'Inactive'
+  };
+
+  const statusOptions = [
+    { value: 'active', label: 'Active' },
+    { value: 'on_leave', label: 'On Leave' },
+    { value: 'sick_leave', label: 'Sick Leave' },
+    { value: 'inactive', label: 'Inactive' }
+  ];
 
   const statusColors = {
-    'Active': 'bg-green-900 text-green-200',
-    'On Leave': 'bg-yellow-900 text-yellow-200',
-    'Sick Leave': 'bg-orange-900 text-orange-200',
-    'Inactive': 'bg-gray-700 text-gray-300'
+    'active': 'bg-green-900 text-green-200',
+    'on_leave': 'bg-yellow-900 text-yellow-200',
+    'sick_leave': 'bg-orange-900 text-orange-200',
+    'inactive': 'bg-gray-700 text-gray-300'
   };
 
-  const handleStatusChange = (driverId, newStatus) => {
-    const updatedDrivers = drivers.map(driver =>
-      driver.id === driverId ? { ...driver, status: newStatus } : driver
-    );
-    setDrivers(updatedDrivers);
-    saveDrivers(updatedDrivers);
-    setStatusDropdownId(null);
+  const handleStatusChange = async (driverId, newStatus) => {
+    try {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`http://localhost:3001/api/drivers/${driverId}/status`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (!response.ok) throw new Error('Failed to update status');
+      const updated = await response.json();
+      const updatedDrivers = drivers.map(d => d.driver_id === driverId ? updated : d);
+      setDrivers(updatedDrivers);
+      dispatchDriversUpdated(updatedDrivers);
+      setStatusDropdownId(null);
+    } catch (err) {
+      toast.error('Failed to update driver status');
+      console.error(err);
+    }
   };
+
+  const getDisplayStatus = (status) => statusDisplayMap[status] || status;
 
   return (
     <div className="space-y-6">
@@ -319,17 +364,17 @@ const BusinessOwnerDrivers = () => {
           </div>
         ) : drivers.length > 0 ? (
           drivers.map((driver) => (
-            <div key={driver.id} className="bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-blue-500/50 transition-colors">
+            <div key={driver.driver_id} className="bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-blue-500/50 transition-colors">
               <div className="flex items-start justify-between">
                 <div className="flex items-start space-x-4">
                   <div className="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center flex-shrink-0">
                     <span className="text-lg font-bold text-white">
-                      {driver.firstName.charAt(0)}{driver.lastName.charAt(0)}
+                      {(driver.first_name || '').charAt(0)}{(driver.last_name || '').charAt(0)}
                     </span>
                   </div>
                   <div>
                     <h3 className="text-lg font-semibold text-white">
-                      {driver.firstName} {driver.lastName}
+                      {driver.first_name} {driver.last_name}
                     </h3>
                     <p className="text-gray-400">{driver.email}</p>
                     <p className="text-sm text-gray-500 mt-2">{driver.phone}</p>
@@ -337,25 +382,25 @@ const BusinessOwnerDrivers = () => {
                 </div>
                 <div className="relative flex items-center space-x-2">
                   <button
-                    onClick={() => setStatusDropdownId(statusDropdownId === driver.id ? null : driver.id)}
+                    onClick={() => setStatusDropdownId(statusDropdownId === driver.driver_id ? null : driver.driver_id)}
                     className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium cursor-pointer hover:opacity-80 transition-opacity ${statusColors[driver.status] || 'bg-gray-700 text-gray-300'}`}
                   >
-                    {driver.status}
+                    {getDisplayStatus(driver.status)}
                     <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                   </button>
-                  {statusDropdownId === driver.id && (
+                  {statusDropdownId === driver.driver_id && (
                     <div className="absolute right-0 top-8 z-10 bg-gray-700 border border-gray-600 rounded-lg shadow-lg py-1 min-w-[140px]">
-                      {statusOptions.map((status) => (
+                      {statusOptions.map((opt) => (
                         <button
-                          key={status}
-                          onClick={() => handleStatusChange(driver.id, status)}
+                          key={opt.value}
+                          onClick={() => handleStatusChange(driver.driver_id, opt.value)}
                           className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-600 transition-colors ${
-                            driver.status === status ? 'text-blue-400 font-medium' : 'text-gray-200'
+                            driver.status === opt.value ? 'text-blue-400 font-medium' : 'text-gray-200'
                           }`}
                         >
-                          {status}
+                          {opt.label}
                         </button>
                       ))}
                     </div>
@@ -367,15 +412,17 @@ const BusinessOwnerDrivers = () => {
               <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div>
                   <p className="text-xs text-gray-500 uppercase tracking-wide">License Number</p>
-                  <p className="text-sm font-medium text-gray-200 mt-1">{driver.licenseNumber}</p>
+                  <p className="text-sm font-medium text-gray-200 mt-1">{driver.license_number || 'N/A'}</p>
                 </div>
                 <div>
                   <p className="text-xs text-gray-500 uppercase tracking-wide">License Expiry</p>
-                  <p className="text-sm font-medium text-gray-200 mt-1">{driver.licenseExpiry}</p>
+                  <p className="text-sm font-medium text-gray-200 mt-1">
+                    {driver.license_expiry ? new Date(driver.license_expiry).toLocaleDateString() : 'N/A'}
+                  </p>
                 </div>
                 <div>
                   <p className="text-xs text-gray-500 uppercase tracking-wide">Rides Completed</p>
-                  <p className="text-sm font-medium text-gray-200 mt-1">{driver.ridesCompleted}</p>
+                  <p className="text-sm font-medium text-gray-200 mt-1">{driver.rides_completed || 0}</p>
                 </div>
                 <div className="flex justify-end space-x-2">
                   <button
@@ -385,7 +432,7 @@ const BusinessOwnerDrivers = () => {
                     Edit
                   </button>
                   <button
-                    onClick={() => handleDeactivateDriver(driver.id)}
+                    onClick={() => handleDeactivateDriver(driver.driver_id)}
                     className="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 rounded text-white transition-colors"
                   >
                     Remove
