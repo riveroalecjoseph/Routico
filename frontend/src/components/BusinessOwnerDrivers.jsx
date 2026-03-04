@@ -83,6 +83,7 @@ const BusinessOwnerDrivers = () => {
             phone: formData.phone,
             licenseNumber: formData.licenseNumber,
             licenseExpiry: formData.licenseExpiry || null,
+            ridesCompleted: parseInt(formData.ridesCompleted) || 0,
             status: formData.status || 'active'
           })
         });

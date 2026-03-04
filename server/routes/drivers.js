@@ -113,7 +113,7 @@ router.put('/:driverId', requireAuth, async (req, res) => {
     const userId = req.user.user_id;
     const driverId = req.params.driverId;
 
-    const { firstName, lastName, email, phone, licenseNumber, licenseExpiry, status } = req.body;
+    const { firstName, lastName, email, phone, licenseNumber, licenseExpiry, ridesCompleted, status } = req.body;
 
     const [ownerResult] = await db.query(
       'SELECT owner_id FROM businessowners WHERE user_id = ?',
@@ -137,9 +137,9 @@ router.put('/:driverId', requireAuth, async (req, res) => {
     }
 
     await db.query(
-      `UPDATE drivers SET first_name=?, last_name=?, email=?, phone=?, license_number=?, license_expiry=?, status=?
+      `UPDATE drivers SET first_name=?, last_name=?, email=?, phone=?, license_number=?, license_expiry=?, rides_completed=?, status=?
        WHERE driver_id=? AND owner_id=?`,
-      [firstName, lastName, email || null, phone || null, licenseNumber || null, licenseExpiry || null, status || 'active', driverId, ownerId]
+      [firstName, lastName, email || null, phone || null, licenseNumber || null, licenseExpiry || null, parseInt(ridesCompleted) || 0, status || 'active', driverId, ownerId]
     );
 
     const [updated] = await db.query('SELECT * FROM drivers WHERE driver_id = ?', [driverId]);
