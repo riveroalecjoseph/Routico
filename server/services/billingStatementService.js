@@ -116,8 +116,20 @@ class BillingStatementService {
    */
   async getStatementsByOwner(ownerId) {
     try {
+      // Auto-recalculate current month's billing from actual orders
+      const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+      await this.db.query(
+        `UPDATE billing b SET
+          b.flat_fee = 2000.00,
+          b.total_commission = (SELECT COUNT(*) * 10.00 FROM orders o WHERE o.business_owner_id = b.owner_id AND DATE_FORMAT(o.order_created_at, '%Y-%m') = DATE_FORMAT(b.billing_period, '%Y-%m')),
+          b.total_due = 2000.00 + (SELECT COUNT(*) * 10.00 FROM orders o WHERE o.business_owner_id = b.owner_id AND DATE_FORMAT(o.order_created_at, '%Y-%m') = DATE_FORMAT(b.billing_period, '%Y-%m')),
+          b.status = CASE WHEN b.status = 'free' THEN 'pending' ELSE b.status END
+        WHERE b.owner_id = ? AND DATE_FORMAT(b.billing_period, '%Y-%m') = ?`,
+        [ownerId, currentMonth]
+      );
+
       const [statements] = await this.db.query(
-        `SELECT 
+        `SELECT
           b.billing_id as statement_id,
           b.owner_id,
           DATE_FORMAT(b.billing_period, '%Y-%m') as statement_period,
@@ -130,15 +142,15 @@ class BillingStatementService {
           -- Calculate due date and grace period
           DATE_ADD(b.billing_period, INTERVAL 1 MONTH) as due_date,
           DATE_ADD(DATE_ADD(b.billing_period, INTERVAL 1 MONTH), INTERVAL 7 DAY) as grace_period_end,
-          -- Calculate delivery count
-          ROUND(b.total_commission / 10) as delivery_count,
+          -- Calculate delivery count from orders
+          (SELECT COUNT(*) FROM orders o WHERE o.business_owner_id = b.owner_id AND DATE_FORMAT(o.order_created_at, '%Y-%m') = DATE_FORMAT(b.billing_period, '%Y-%m')) as delivery_count,
           -- Get actual delivery fees from orders
-          (SELECT COALESCE(SUM(o.delivery_fee), 0) 
-           FROM orders o 
-           WHERE o.business_owner_id = b.owner_id 
+          (SELECT COALESCE(SUM(o.delivery_fee), 0)
+           FROM orders o
+           WHERE o.business_owner_id = b.owner_id
            AND DATE_FORMAT(o.order_created_at, '%Y-%m') = DATE_FORMAT(b.billing_period, '%Y-%m')) as total_delivery_fees
-         FROM billing b 
-         WHERE b.owner_id = ? 
+         FROM billing b
+         WHERE b.owner_id = ?
          ORDER BY b.billing_period DESC`,
         [ownerId]
       );
