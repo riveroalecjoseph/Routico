@@ -1,0 +1,1373 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useAuth } from '../auth/AuthContext';
+import { format, isToday, isAfter, parseISO } from 'date-fns';
+
+const BusinessOwnerOrders = () => {
+  const { user } = useAuth();
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [mapsError, setMapsError] = useState(null);
+  
+  // Google Maps refs
+  const pickupInputRef = useRef(null);
+  const deliveryInputRef = useRef(null);
+  const pickupAutocompleteRef = useRef(null);
+  const deliveryAutocompleteRef = useRef(null);
+  const mapRef = useRef(null);
+  
+  // Form state - matching database schema
+  const [formData, setFormData] = useState({
+    customerName: '',
+    customerPhone: '',
+    pickupAddress: '',
+    dropoffAddress: '', // database uses dropoff_address
+    pickupLocation: null, // { lat, lng } - for map display
+    dropoffLocation: null, // { lat, lng } - for map display
+    itemWeight: '',
+    size: '', // item dimensions
+    scheduledDate: '',
+    scheduledTime: '',
+    routeDistance: 0, // Real road distance in km
+    routeDuration: 0,
+    deliveryFee: '',
+  });
+
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const orderDetailMapRef = useRef(null); // For detail view map
+  const [editMode, setEditMode] = useState(false);
+  const [editFields, setEditFields] = useState({});
+  const [deleting, setDeleting] = useState(false); // for confirmation
+  const [editLoading, setEditLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  // Helper to update orders in-place
+  const updateOrderInState = updated => setOrders(orders => orders.map(o => o.id === updated.id ? updated : o));
+  const removeOrderFromState = id => setOrders(orders => orders.filter(o => o.id !== id));
+
+  const editPickupInputRef = useRef(null);
+  const editDropoffInputRef = useRef(null);
+  const editPickupAutocompleteRef = useRef(null);
+  const editDropoffAutocompleteRef = useRef(null);
+
+  useEffect(() => {
+    if (!editMode) return;
+    // Google Places Autocomplete for pickup and dropoff in edit
+    if (window.google && window.google.maps && window.google.maps.places) {
+      if (editPickupInputRef.current && !editPickupAutocompleteRef.current) {
+        editPickupAutocompleteRef.current = new window.google.maps.places.Autocomplete(
+          editPickupInputRef.current,
+          { types: ['address'], componentRestrictions: { country: 'ph' } }
+        );
+        editPickupAutocompleteRef.current.addListener('place_changed', () => {
+          const place = editPickupAutocompleteRef.current.getPlace();
+          if (place.formatted_address) {
+            setEditFields(f => ({ ...f, pickup_location: place.formatted_address }));
+          }
+        });
+      }
+      if (editDropoffInputRef.current && !editDropoffAutocompleteRef.current) {
+        editDropoffAutocompleteRef.current = new window.google.maps.places.Autocomplete(
+          editDropoffInputRef.current,
+          { types: ['address'], componentRestrictions: { country: 'ph' } }
+        );
+        editDropoffAutocompleteRef.current.addListener('place_changed', () => {
+          const place = editDropoffAutocompleteRef.current.getPlace();
+          if (place.formatted_address) {
+            setEditFields(f => ({ ...f, drop_off_location: place.formatted_address }));
+          }
+        });
+      }
+    }
+    // Cleanup on edit exit
+    return () => {
+      editPickupAutocompleteRef.current = null;
+      editDropoffAutocompleteRef.current = null;
+    };
+  }, [editMode]);
+
+  useEffect(() => {
+    // Initialize Google Maps when component mounts
+    // Use Firebase API key (same key works for Google Maps)
+    const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
+    
+    console.log('VITE_FIREBASE_API_KEY exists:', !!apiKey);
+    if (apiKey) {
+      console.log('API Key first 10 chars:', apiKey.substring(0, 10) + '...');
+    }
+    
+    if (!apiKey) {
+      console.error('Google Maps API key is not configured!');
+      setMapsError('Google Maps API key is not configured. Please check your .env file.');
+      return;
+    }
+    
+    if (window.google && window.google.maps) {
+      console.log('Google Maps already available');
+      initializeGoogleMaps();
+    } else {
+      // Check if script already exists
+      const existingScript = document.querySelector('script[src*="maps.googleapis.com"]');
+      if (existingScript) {
+        console.log('Google Maps script already loaded, waiting for load...');
+        existingScript.addEventListener('load', () => initializeGoogleMaps());
+        return;
+      }
+      
+      console.log('Loading Google Maps script...');
+      const scriptUrl = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,directions`;
+      console.log('Script URL:', scriptUrl);
+      
+      // Load Google Maps script dynamically
+      const script = document.createElement('script');
+      script.src = scriptUrl;
+      script.async = true;
+      script.defer = true;
+      
+      script.onload = () => {
+        console.log('Google Maps loaded successfully');
+        initializeGoogleMaps();
+      };
+      
+      script.onerror = () => {
+        console.error('Failed to load Google Maps script');
+        console.log('API Key used:', apiKey);
+        setMapsError('Failed to load Google Maps. Please check your API key and ensure Places API is enabled.');
+      };
+      
+      document.head.appendChild(script);
+    }
+  }, []);
+
+  // Re-initialize autocomplete and map when form is shown
+  useEffect(() => {
+    if (showCreateForm && window.google && window.google.maps) {
+      // Small delay to ensure refs are available
+      setTimeout(() => {
+        initializeGoogleMaps();
+      }, 100);
+    }
+  }, [showCreateForm]);
+
+  // Update map when locations change
+  useEffect(() => {
+    if (formData.pickupLocation || formData.deliveryLocation) {
+      // Delay to ensure map is initialized
+      setTimeout(() => {
+        updateMap();
+      }, 100);
+    }
+  }, [formData.pickupLocation, formData.deliveryLocation]);
+
+  // Fetch all orders for this business owner when the component mounts
+  useEffect(() => {
+    const fetchOrders = async () => {
+      setLoading(true);
+      try {
+        if (!user) return;
+        const token = await user.getIdToken();
+        const response = await fetch('http://localhost:3001/api/orders', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setOrders(data);
+        } else {
+          setOrders([]);
+        }
+      } catch (err) {
+        setOrders([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchOrders();
+  }, [user]);
+
+  const initializeGoogleMaps = () => {
+    if (!window.google || !window.google.maps) {
+      console.error('Google Maps API not available');
+      return;
+    }
+    
+    console.log('Initializing Google Maps...');
+    
+    try {
+      // Initialize autocomplete
+      initializeAutocomplete();
+      
+      // Initialize map if not already initialized
+      if (mapRef.current && !window.orderMap) {
+        const defaultLocation = { lat: 14.5995, lng: 120.9842 }; // Metro Manila center
+        const map = new window.google.maps.Map(mapRef.current, {
+          zoom: 12,
+          center: defaultLocation,
+          mapTypeControl: true,
+          streetViewControl: true,
+          fullscreenControl: true
+        });
+        
+        window.orderMap = map; // Store map globally for updates
+        console.log('Map initialized successfully');
+        
+        // Update map with current locations
+        if (formData.pickupLocation || formData.deliveryLocation) {
+          setTimeout(() => updateMap(), 200);
+        }
+      } else if (window.orderMap) {
+        console.log('Map already initialized');
+      }
+    } catch (error) {
+      console.error('Error initializing Google Maps:', error);
+    }
+  };
+
+  const initializeAutocomplete = () => {
+    if (!window.google || !window.google.maps) {
+      console.error('Google Maps API not available for autocomplete');
+      return;
+    }
+
+    console.log('Initializing autocomplete...');
+
+    // Initialize autocomplete for pickup address
+    if (pickupInputRef.current && !pickupAutocompleteRef.current) {
+      try {
+        pickupAutocompleteRef.current = new window.google.maps.places.Autocomplete(
+          pickupInputRef.current,
+          {
+            types: ['address'],
+            componentRestrictions: { country: 'ph' } // Restrict to Philippines
+          }
+        );
+        
+        console.log('Pickup autocomplete initialized');
+        
+      pickupAutocompleteRef.current.addListener('place_changed', () => {
+        try {
+          const place = pickupAutocompleteRef.current.getPlace();
+          if (place.geometry) {
+            const lat = place.geometry.location.lat();
+            const lng = place.geometry.location.lng();
+            
+            setFormData(prev => ({
+              ...prev,
+              pickupAddress: place.formatted_address,
+              pickupLocation: { lat, lng }
+            }));
+            
+            console.log('Pickup location set:', { lat, lng, address: place.formatted_address });
+            
+            // Update map after state update
+            setTimeout(() => updateMap(), 100);
+          }
+        } catch (error) {
+          console.error('Error handling pickup place_changed:', error);
+        }
+      });
+      } catch (error) {
+        console.error('Error initializing pickup autocomplete:', error);
+      }
+    }
+
+    // Initialize autocomplete for delivery address
+    if (deliveryInputRef.current && !deliveryAutocompleteRef.current) {
+      try {
+        deliveryAutocompleteRef.current = new window.google.maps.places.Autocomplete(
+          deliveryInputRef.current,
+          {
+            types: ['address'],
+            componentRestrictions: { country: 'ph' }
+          }
+        );
+        
+        console.log('Delivery autocomplete initialized');
+        
+      deliveryAutocompleteRef.current.addListener('place_changed', () => {
+        try {
+          const place = deliveryAutocompleteRef.current.getPlace();
+          if (place.geometry) {
+            const lat = place.geometry.location.lat();
+            const lng = place.geometry.location.lng();
+            
+            setFormData(prev => ({
+              ...prev,
+              dropoffAddress: place.formatted_address,
+              dropoffLocation: { lat, lng }
+            }));
+            
+            console.log('Delivery location set:', { lat, lng, address: place.formatted_address });
+            
+            // Update map after state update
+            setTimeout(() => updateMap(), 100);
+          }
+        } catch (error) {
+          console.error('Error handling delivery place_changed:', error);
+        }
+      });
+      } catch (error) {
+        console.error('Error initializing delivery autocomplete:', error);
+      }
+    }
+  };
+
+  const updateMap = () => {
+    if (!window.orderMap) return;
+
+    // Clear existing markers
+    if (window.orderMarkers) {
+      window.orderMarkers.forEach(marker => marker.setMap(null));
+    }
+    window.orderMarkers = [];
+
+    // Clear existing route
+    if (window.DirectionsRenderer) {
+      window.DirectionsRenderer.setMap(null);
+    }
+
+    // Add pickup marker
+    if (formData.pickupLocation) {
+      const pickupMarker = new window.google.maps.Marker({
+        position: formData.pickupLocation,
+        map: window.orderMap,
+        label: 'P',
+        title: 'Pickup Location',
+        icon: {
+          url: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png'
+        }
+      });
+      window.orderMarkers.push(pickupMarker);
+    }
+
+    // Add delivery marker
+    if (formData.dropoffLocation) {
+      const deliveryMarker = new window.google.maps.Marker({
+        position: formData.dropoffLocation,
+        map: window.orderMap,
+        label: 'D',
+        title: 'Dropoff Location',
+        icon: {
+          url: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png'
+        }
+      });
+      window.orderMarkers.push(deliveryMarker);
+    }
+
+    // Get actual road route if both locations exist
+    if (formData.pickupLocation && formData.dropoffLocation) {
+      getDirections(formData.pickupLocation, formData.dropoffLocation);
+    }
+  };
+
+  const getDirections = (origin, destination) => {
+    if (!window.google || !window.google.maps) {
+      console.error('Google Maps not available');
+      return;
+    }
+    
+    // Initialize Directions service if not already done
+    if (!window.DirectionsService) {
+      window.DirectionsService = new window.google.maps.DirectionsService();
+    }
+    
+    if (!window.DirectionsRenderer) {
+      window.DirectionsRenderer = new window.google.maps.DirectionsRenderer({
+        map: window.orderMap,
+        suppressMarkers: true, // We'll add our own markers
+        preserveViewport: false
+      });
+    }
+    
+    console.log('Getting directions from', origin, 'to', destination);
+    
+    window.DirectionsService.route(
+      {
+        origin: new window.google.maps.LatLng(origin.lat, origin.lng),
+        destination: new window.google.maps.LatLng(destination.lat, destination.lng),
+        travelMode: window.google.maps.TravelMode.DRIVING,
+        region: 'ph', // Philippines
+        unitSystem: window.google.maps.UnitSystem.METRIC
+      },
+      (result, status) => {
+        if (status === window.google.maps.DirectionsStatus.OK) {
+          // Display the route
+          window.DirectionsRenderer.setDirections(result);
+          
+          // Get route details
+          const route = result.routes[0];
+          const leg = route.legs[0];
+          
+          // Update distance and time
+          setFormData(prev => ({
+            ...prev,
+            routeDistance: leg.distance.value / 1000, // Convert to km
+            routeDuration: Math.round(leg.duration.value / 60) // Convert to minutes
+          }));
+
+          console.log('Route calculated:', {
+            distance: leg.distance.text,
+            duration: leg.duration.text,
+            distanceInKm: leg.distance.value / 1000
+          });
+        } else {
+          console.error('Directions request failed:', status);
+        }
+      }
+    );
+  };
+
+  useEffect(() => {
+    if (formData.pickupLocation || formData.dropoffLocation) {
+      const timer = setTimeout(() => {
+        updateMap();
+      }, 300);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [formData.pickupLocation, formData.dropoffLocation]);
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      const token = await user.getIdToken();
+
+      // Prepare data matching database schema
+      const orderData = {
+        customerName: formData.customerName,
+        customerPhone: formData.customerPhone,
+        pickupAddress: formData.pickupAddress,
+        deliveryAddress: formData.dropoffAddress, // map to database field
+        deliveryFee: formData.deliveryFee,
+        itemWeight: formData.itemWeight,
+        size: formData.size,
+        scheduledDate: formData.scheduledDate,
+        scheduledTime: formData.scheduledTime,
+        distance: formData.routeDistance, // real road distance
+        estimatedTime: formData.routeDuration // in minutes
+      };
+
+      const response = await fetch('http://localhost:3001/api/orders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(orderData)
+      });
+
+      if (response.ok) {
+        const newOrder = await response.json();
+        setOrders(prev => [...prev, newOrder]);
+        resetForm();
+        setShowCreateForm(false);
+        alert('Order created successfully!');
+      } else {
+        const error = await response.json();
+        console.error('Backend error:', error);
+        alert(`Error creating order: ${error.message || error.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Error creating order:', error);
+      alert(`Error creating order: ${error.message || 'Please try again.'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const calculateDistance = (loc1, loc2) => {
+    const R = 6371; // Earth radius in km
+    const dLat = (loc2.lat - loc1.lat) * Math.PI / 180;
+    const dLon = (loc2.lng - loc1.lng) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(loc1.lat * Math.PI / 180) * Math.cos(loc2.lat * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+
+  const resetForm = () => {
+    setFormData({
+      customerName: '',
+      customerPhone: '',
+      pickupAddress: '',
+      dropoffAddress: '',
+      pickupLocation: null,
+      dropoffLocation: null,
+      itemWeight: '',
+      size: '',
+      scheduledDate: '',
+      scheduledTime: '',
+      routeDistance: 0,
+      routeDuration: 0,
+      deliveryFee: '',
+    });
+    
+    // Clear autocomplete instances to allow re-initialization
+    pickupAutocompleteRef.current = null;
+    deliveryAutocompleteRef.current = null;
+    
+    // Clear map markers and route
+    if (window.orderMarkers) {
+      window.orderMarkers.forEach(marker => marker.setMap(null));
+      window.orderMarkers = [];
+    }
+    if (window.DirectionsRenderer) {
+      window.DirectionsRenderer.setMap(null);
+    }
+  };
+
+  const getStatusColor = (status) => {
+    const colors = {
+      pending: 'bg-yellow-900 text-yellow-200',
+      assigned: 'bg-blue-900 text-blue-200',
+      confirmed: 'bg-blue-900 text-blue-200',
+      'in-transit': 'bg-purple-900 text-purple-200',
+      picked_up: 'bg-purple-900 text-purple-200',
+      delivered: 'bg-green-900 text-green-200',
+      cancelled: 'bg-red-900 text-red-200'
+    };
+    return colors[status?.toLowerCase()] || 'bg-gray-900 text-gray-200';
+  };
+
+  useEffect(() => {
+    const loadScript = (url, onLoad) => {
+      if (document.querySelector(`script[src='${url}']`)) {
+        onLoad();
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = url;
+      script.async = true;
+      script.onload = onLoad;
+      document.head.appendChild(script);
+    };
+
+    // Show map whenever selectedOrder changes
+    const showMapForOrder = async () => {
+      if (!selectedOrder || !orderDetailMapRef.current) return;
+      const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
+      if (!apiKey) return;
+      const initialize = async () => {
+        // Geocode address ⇒ lat/lng if missing
+        const geocode = async (address) => {
+          return new Promise(resolve => {
+            const geocoder = new window.google.maps.Geocoder();
+            geocoder.geocode({ address }, (results, status) => {
+              if (status === 'OK') {
+                const loc = results[0].geometry.location;
+                resolve({ lat: loc.lat(), lng: loc.lng() });
+              } else {
+                resolve(null);
+              }
+            });
+          });
+        };
+
+        let pickupLatLng = selectedOrder.pickup_latlng || null;
+        let dropoffLatLng = selectedOrder.dropoff_latlng || null;
+        if (!pickupLatLng && selectedOrder.pickup_location) {
+          pickupLatLng = await geocode(selectedOrder.pickup_location);
+        }
+        if (!dropoffLatLng && selectedOrder.drop_off_location) {
+          dropoffLatLng = await geocode(selectedOrder.drop_off_location);
+        }
+        // Clear old map
+        orderDetailMapRef.current.innerHTML = '';
+        if (!pickupLatLng || !dropoffLatLng) return;
+        const map = new window.google.maps.Map(orderDetailMapRef.current, {
+          zoom: 12,
+          center: pickupLatLng,
+        });
+        // Add markers
+        new window.google.maps.Marker({
+          position: pickupLatLng,
+          map,
+          label: 'P', title: 'Pickup', icon: {
+            url: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png'
+          }
+        });
+        new window.google.maps.Marker({
+          position: dropoffLatLng,
+          map,
+          label: 'D', title: 'Dropoff', icon: {
+            url: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png'
+          }
+        });
+        // Show route
+        const ds = new window.google.maps.DirectionsService();
+        const dr = new window.google.maps.DirectionsRenderer({ map, suppressMarkers: true });
+        ds.route({
+          origin: pickupLatLng,
+          destination: dropoffLatLng,
+          travelMode: window.google.maps.TravelMode.DRIVING,
+          region: 'ph',
+        }, (result, status) => {
+          if (status === 'OK') dr.setDirections(result);
+        });
+      };
+
+      if (!(window.google && window.google.maps)) {
+        loadScript(`https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places` , initialize);
+      } else {
+        initialize();
+      }
+    };
+    showMapForOrder();
+  }, [selectedOrder]);
+
+  // Group rendering refactored into function
+  const renderGroupedOrders = () => {
+    // Grouping logic
+    const today = new Date();
+    const previousMap = {};
+    const todayOrders = [];
+    const upcomingMap = {};
+    orders.forEach(order => {
+      if (order.scheduled_delivery_time) {
+        const d = parseISO(order.scheduled_delivery_time);
+        const dateKey = format(d, "yyyy-MM-dd");
+        if (isToday(d)) {
+          todayOrders.push(order);
+        } else if (isAfter(d, today)) {
+          if (!upcomingMap[dateKey]) upcomingMap[dateKey] = [];
+          upcomingMap[dateKey].push(order);
+        } else { // before today
+          if (!previousMap[dateKey]) previousMap[dateKey] = [];
+          previousMap[dateKey].push(order);
+        }
+      }
+    });
+    const previousDates = Object.keys(previousMap).sort().reverse();
+    const upcomingDates = Object.keys(upcomingMap).sort();
+    return (
+      <div className="space-y-8">
+        {previousDates.length > 0 && (
+          <div>
+            <h4 className="text-xl font-semibold text-gray-400 mb-4">Previous Orders</h4>
+            {previousDates.map(dateStr => (
+              <div key={dateStr}>
+                <h5 className="text-lg font-semibold text-gray-400 mb-2">{format(parseISO(dateStr), 'MMMM d, yyyy')}</h5>
+                <div className="grid grid-cols-1 gap-4">
+                  {previousMap[dateStr].map(order => (
+                    <div
+                      key={order.id}
+                      className={`bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-gray-500 transition-colors cursor-pointer group ${(selectedOrder && selectedOrder.id === order.id) ? 'ring-2 ring-gray-400' : ''}`}
+                      onClick={() => !showCreateForm && setSelectedOrder(order)}
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`View Order ${order.id}`}
+                    >
+                      {/* order card code unchanged */}
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-3 mb-3">
+                            <h4 className="text-lg font-semibold text-white">{order.customer_name || 'Customer'}</h4>
+                            <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(order.order_status)}`}>
+                              {order.order_status}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-300">
+                            <div>
+                              <p className="text-gray-400">Pickup:</p>
+                              <p className="text-white">{order.pickup_location}</p>
+                            </div>
+                            <div>
+                              <p className="text-gray-400">Delivery:</p>
+                              <p className="text-white">{order.drop_off_location}</p>
+                            </div>
+                            <div>
+                              <p className="text-gray-400">Weight:</p>
+                              <p className="text-white">{order.weight} kg</p>
+                            </div>
+                            {order.size && (
+                              <div>
+                                <p className="text-gray-400">Size:</p>
+                                <p className="text-white">{order.size}</p>
+                              </div>
+                            )}
+                            {order.scheduled_delivery_time && (
+                              <div>
+                                <p className="text-gray-400">Scheduled:</p>
+                                <p className="text-white">{new Date(order.scheduled_delivery_time).toLocaleString()}</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={e => { e.stopPropagation(); setSelectedOrder(selectedOrder?.id === order.id ? null : order); }}
+                          className="ml-4 text-gray-300 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                          tabIndex={-1}
+                        >
+                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {todayOrders.length > 0 && (
+          <div>
+            <h4 className="text-xl font-semibold text-blue-400 mb-4">Today</h4>
+            <div className="grid grid-cols-1 gap-4">
+              {todayOrders.map(order => (
+                <div
+                  key={order.id}
+                  className={`bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-blue-500 transition-colors cursor-pointer group ${(selectedOrder && selectedOrder.id === order.id) ? 'ring-2 ring-blue-400' : ''}`}
+                  onClick={() => !showCreateForm && setSelectedOrder(order)}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`View Order ${order.id}`}
+                >
+                  {/* order card code unchanged */}
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-3 mb-3">
+                        <h4 className="text-lg font-semibold text-white">{order.customer_name || 'Customer'}</h4>
+                        <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(order.order_status)}`}>
+                          {order.order_status}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-300">
+                        <div>
+                          <p className="text-gray-400">Pickup:</p>
+                          <p className="text-white">{order.pickup_location}</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-400">Delivery:</p>
+                          <p className="text-white">{order.drop_off_location}</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-400">Weight:</p>
+                          <p className="text-white">{order.weight} kg</p>
+                        </div>
+                        {order.size && (
+                          <div>
+                            <p className="text-gray-400">Size:</p>
+                            <p className="text-white">{order.size}</p>
+                          </div>
+                        )}
+                        {order.scheduled_delivery_time && (
+                          <div>
+                            <p className="text-gray-400">Scheduled:</p>
+                            <p className="text-white">{new Date(order.scheduled_delivery_time).toLocaleString()}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={e => { e.stopPropagation(); setSelectedOrder(selectedOrder?.id === order.id ? null : order); }}
+                      className="ml-4 text-blue-400 hover:text-blue-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                      tabIndex={-1}
+                    >
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {upcomingDates.map(dateStr => (
+          <div key={dateStr}>
+            <h4 className="text-xl font-semibold text-yellow-400 mb-4">{format(parseISO(dateStr), 'MMMM d, yyyy')}</h4>
+            <div className="grid grid-cols-1 gap-4">
+              {upcomingMap[dateStr].map(order => (
+                <div
+                  key={order.id}
+                  className={`bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-yellow-400 transition-colors cursor-pointer group ${(selectedOrder && selectedOrder.id === order.id) ? 'ring-2 ring-yellow-400' : ''}`}
+                  onClick={() => !showCreateForm && setSelectedOrder(order)}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`View Order ${order.id}`}
+                >
+                  {/* order card code unchanged */}
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-3 mb-3">
+                        <h4 className="text-lg font-semibold text-white">{order.customer_name || 'Customer'}</h4>
+                        <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(order.order_status)}`}>
+                          {order.order_status}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-300">
+                        <div>
+                          <p className="text-gray-400">Pickup:</p>
+                          <p className="text-white">{order.pickup_location}</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-400">Delivery:</p>
+                          <p className="text-white">{order.drop_off_location}</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-400">Weight:</p>
+                          <p className="text-white">{order.weight} kg</p>
+                        </div>
+                        {order.size && (
+                          <div>
+                            <p className="text-gray-400">Size:</p>
+                            <p className="text-white">{order.size}</p>
+                          </div>
+                        )}
+                        {order.scheduled_delivery_time && (
+                          <div>
+                            <p className="text-gray-400">Scheduled:</p>
+                            <p className="text-white">{new Date(order.scheduled_delivery_time).toLocaleString()}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={e => { e.stopPropagation(); setSelectedOrder(selectedOrder?.id === order.id ? null : order); }}
+                      className="ml-4 text-yellow-400 hover:text-yellow-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                      tabIndex={-1}
+                    >
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // Google Maps in edit mode for preview
+  useEffect(() => {
+    if (!editMode) return;
+    const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
+    const loadScript = (url, onLoad) => {
+      if (document.querySelector(`script[src='${url}']`)) {
+        onLoad(); return;
+      }
+      const script = document.createElement('script');
+      script.src = url;
+      script.async = true;
+      script.onload = onLoad;
+      document.head.appendChild(script);
+    };
+    const showEditMap = async () => {
+      if (!orderDetailMapRef.current) return;
+      const initialize = async () => {
+        const geocode = async (address) => new Promise(resolve => {
+          const geocoder = new window.google.maps.Geocoder();
+          geocoder.geocode({ address }, (results, status) => {
+            if (status === 'OK') {
+              const loc = results[0].geometry.location;
+              resolve({ lat: loc.lat(), lng: loc.lng() });
+            } else resolve(null);
+          });
+        });
+        let pi = editFields.pickup_location ? await geocode(editFields.pickup_location) : null;
+        let di = editFields.drop_off_location ? await geocode(editFields.drop_off_location) : null;
+        orderDetailMapRef.current.innerHTML = '';
+        if (!pi || !di) return;
+        const map = new window.google.maps.Map(orderDetailMapRef.current, { zoom: 12, center: pi });
+        new window.google.maps.Marker({ position: pi, map, label: 'P', title: 'Pickup', icon: { url: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png' }});
+        new window.google.maps.Marker({ position: di, map, label: 'D', title: 'Dropoff', icon: { url: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png' }});
+        const ds = new window.google.maps.DirectionsService();
+        const dr = new window.google.maps.DirectionsRenderer({ map, suppressMarkers: true });
+        ds.route({ origin: pi, destination: di, travelMode: window.google.maps.TravelMode.DRIVING, region: 'ph' }, (result, status) => {
+          if (status === 'OK') dr.setDirections(result);
+        });
+      };
+
+      if (!(window.google && window.google.maps)) {
+        loadScript(`https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`, initialize);
+      } else {
+        initialize();
+      }
+    };
+    showEditMap();
+    // rerun on field changes in edit mode
+  }, [editMode, editFields.pickup_location, editFields.drop_off_location]);
+
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Orders Management</h2>
+          <p className="mt-1 text-gray-300">Create and manage delivery orders</p>
+        </div>
+        <button
+          onClick={() => setShowCreateForm(!showCreateForm)}
+          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+        >
+          <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+          </svg>
+          {showCreateForm ? 'Cancel' : 'Create New Order'}
+        </button>
+      </div>
+
+      {/* Create Order Form */}
+      {showCreateForm && (
+        <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
+          <h3 className="text-xl font-bold text-white mb-6">Create New Order</h3>
+          
+          {/* Error Display */}
+          {mapsError && (
+            <div className="mb-4 bg-red-900 border border-red-700 rounded-md p-4">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-red-200">Google Maps Error</h3>
+                  <div className="mt-2 text-sm text-red-300">
+                    <p>{mapsError}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Customer Information */}
+            <div>
+              <h4 className="text-lg font-semibold text-white mb-4">Customer Information</h4>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label htmlFor="customerName" className="block text-sm font-medium text-gray-300 mb-2">
+                    Customer Name *
+                  </label>
+                  <input
+                    type="text"
+                    id="customerName"
+                    name="customerName"
+                    value={formData.customerName}
+                    onChange={handleInputChange}
+                    required
+                    className="w-full px-3 py-2 border border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-700 text-white"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="customerPhone" className="block text-sm font-medium text-gray-300 mb-2">
+                    Phone Number *
+                  </label>
+                  <input
+                    type="tel"
+                    id="customerPhone"
+                    name="customerPhone"
+                    value={formData.customerPhone}
+                    onChange={handleInputChange}
+                    required
+                    className="w-full px-3 py-2 border border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-700 text-white"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Address Selection with Google Maps */}
+            <div>
+              <h4 className="text-lg font-semibold text-white mb-4">Delivery Addresses</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+                <div>
+                  <label htmlFor="pickupAddress" className="block text-sm font-medium text-gray-300 mb-2">
+                    Pickup Address * {formData.pickupLocation && <span className="text-green-400">✓</span>}
+                  </label>
+                  <input
+                    ref={pickupInputRef}
+                    type="text"
+                    id="pickupAddress"
+                    name="pickupAddress"
+                    value={formData.pickupAddress}
+                    onChange={handleInputChange}
+                    required
+                    placeholder="Start typing address..."
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-700 text-white ${
+                      formData.pickupLocation ? 'border-green-500' : 'border-gray-600'
+                    }`}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="dropoffAddress" className="block text-sm font-medium text-gray-300 mb-2">
+                    Dropoff Address * {formData.dropoffLocation && <span className="text-green-400">✓</span>}
+                  </label>
+                  <input
+                    ref={deliveryInputRef}
+                    type="text"
+                    id="dropoffAddress"
+                    name="dropoffAddress"
+                    value={formData.dropoffAddress}
+                    onChange={handleInputChange}
+                    required
+                    placeholder="Start typing address..."
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-700 text-white ${
+                      formData.dropoffLocation ? 'border-green-500' : 'border-gray-600'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              {/* Google Maps Display */}
+              <div className="mt-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h5 className="text-sm font-medium text-gray-300">Route Preview</h5>
+                  {formData.routeDistance > 0 && (
+                    <div className="flex items-center gap-4 text-sm">
+                      <span className="text-blue-400">
+                        📍 {formData.routeDistance.toFixed(2)} km
+                      </span>
+                      {formData.routeDuration > 0 && (
+                        <span className="text-green-400">
+                          ⏱️ {formData.routeDuration} min
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div
+                  ref={mapRef}
+                  className="w-full h-80 rounded-md border border-gray-600"
+                />
+                {formData.pickupLocation && (
+                  <p className="mt-2 text-xs text-green-400">✓ Pickup location set</p>
+                )}
+                {formData.dropoffLocation && (
+                  <p className="text-xs text-red-400">✓ Dropoff location set</p>
+                )}
+              </div>
+            </div>
+
+            {/* Item Information */}
+            <div>
+              <h4 className="text-lg font-semibold text-white mb-4">Item Information</h4>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label htmlFor="itemWeight" className="block text-sm font-medium text-gray-300 mb-2">
+                    Weight (kg) *
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    id="itemWeight"
+                    name="itemWeight"
+                    value={formData.itemWeight}
+                    onChange={handleInputChange}
+                    required
+                    placeholder="0.00"
+                    className="w-full px-3 py-2 border border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-700 text-white"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="size" className="block text-sm font-medium text-gray-300 mb-2">
+                    Size
+                  </label>
+                  <select
+                    id="size"
+                    name="size"
+                    value={formData.size}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2 border border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-700 text-white"
+                  >
+                    <option value="">Select size</option>
+                    <option value="small">Small</option>
+                    <option value="medium">Medium</option>
+                    <option value="large">Large</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Additional Information */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label htmlFor="scheduledDate" className="block text-sm font-medium text-gray-300 mb-2">
+                  Scheduled Date
+                </label>
+                <input
+                  type="date"
+                  id="scheduledDate"
+                  name="scheduledDate"
+                  value={formData.scheduledDate}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-700 text-white"
+                />
+              </div>
+              <div>
+                <label htmlFor="scheduledTime" className="block text-sm font-medium text-gray-300 mb-2">
+                  Scheduled Time
+                </label>
+                <input
+                  type="time"
+                  id="scheduledTime"
+                  name="scheduledTime"
+                  value={formData.scheduledTime}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-700 text-white"
+                />
+              </div>
+            </div>
+
+            {/* Delivery Fee and Commission */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label htmlFor="deliveryFee" className="block text-sm font-medium text-gray-300 mb-2">
+                  Delivery Fee (₱) *
+                </label>
+                <input
+                  type="number"
+                  id="deliveryFee"
+                  name="deliveryFee"
+                  value={formData.deliveryFee}
+                  onChange={handleInputChange}
+                  required
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                  className="w-full px-3 py-2 border border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-700 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Commission (₱)
+                </label>
+                <div className="w-full px-3 py-2 border border-gray-600 rounded-md shadow-sm bg-gray-700 text-white text-sm text-gray-300">
+                  10.00
+                </div>
+              </div>
+            </div>
+
+
+            <div className="flex justify-end space-x-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCreateForm(false);
+                  resetForm();
+                }}
+                className="px-4 py-2 border border-gray-600 text-sm font-medium rounded-md text-gray-300 bg-gray-700 hover:bg-gray-600 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              >
+                {loading ? 'Creating...' : 'Create Order'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Orders List */}
+      <div>
+        <h3 className="text-lg font-semibold text-white mb-4">Recent Orders</h3>
+        {selectedOrder ? (
+          <div className="bg-gray-900 rounded-lg border border-blue-500 p-8 shadow-xl max-w-xl mx-auto">
+            <button
+              onClick={() => { setSelectedOrder(null); setEditMode(false); setEditFields({}); }}
+              className="mb-4 text-blue-400 hover:text-blue-200 text-sm inline-flex items-center"
+            >
+              <svg className="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              Back to list
+            </button>
+            {!editMode ? (
+              <>
+                <div className="flex gap-2 mb-4">
+                  <button
+                    className="px-4 py-1 bg-green-700 text-green-100 rounded hover:bg-green-600 transition-colors"
+                    onClick={() => { setEditMode(true); setEditFields({ ...selectedOrder }); }}
+                  >Edit</button>
+                  <button
+                    className="px-4 py-1 bg-red-700 text-red-100 rounded hover:bg-red-600 transition-colors"
+                    onClick={() => setDeleting(true)}
+                  >Delete</button>
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-2">Order Detail — {selectedOrder.id}</h2>
+                <div className="grid grid-cols-1 gap-2 text-gray-200 mb-6">
+                  <div><b>Status:</b> <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(selectedOrder.order_status)}`}>{selectedOrder.order_status}</span></div>
+                  <div><b>Customer:</b> {selectedOrder.customer_name}</div>
+                  <div><b>Phone:</b> {selectedOrder.customer_phone}</div>
+                  <div><b>Pickup Address:</b> {selectedOrder.pickup_location}</div>
+                  <div><b>Dropoff Address:</b> {selectedOrder.drop_off_location}</div>
+                  <div><b>Assigned Driver:</b> {selectedOrder.driver_name || '—'}</div>
+                  <div><b>Weight:</b> {selectedOrder.weight} kg</div>
+                  <div><b>Size:</b> {selectedOrder.size || 'N/A'}</div>
+                  <div><b>Scheduled:</b> {selectedOrder.scheduled_delivery_time ? new Date(selectedOrder.scheduled_delivery_time).toLocaleString() : '—'}</div>
+                  <div><b>Created at:</b> {selectedOrder.created_at ? new Date(selectedOrder.created_at).toLocaleString() : '—'}</div>
+                  <div><b>Cost:</b> {selectedOrder.cost ? `₱${selectedOrder.cost}` : '—'}</div>
+                  <div><b>Delivery Fee:</b> {selectedOrder.delivery_fee ? `₱${Number(selectedOrder.delivery_fee).toFixed(2)}` : '—'}</div>
+                  <div><b>Commission:</b> ₱10.00</div>
+                </div>
+                <div>
+                  <div className="mb-2 text-sm text-blue-400 font-semibold">Route Preview:</div>
+                  <div ref={orderDetailMapRef} style={{ width: '100%', height: 320, borderRadius: 8, border: '1px solid #334155', background: '#232946' }} />
+                  {(!selectedOrder.pickup_location || !selectedOrder.drop_off_location) && (
+                    <div className="mt-3 text-sm text-gray-400">No map data available for this order.</div>
+                  )}
+                </div>
+                {deleting && (
+                  <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-40">
+                    <div className="bg-gray-900 border border-red-700 rounded-lg p-8 max-w-xs text-center">
+                      <div className="mb-4 text-lg text-red-200 font-bold">Delete this order?</div>
+                      <div className="mb-6 text-gray-300">This can't be undone.</div>
+                      <button
+                        className="px-4 py-1 bg-red-700 text-white rounded hover:bg-red-600 mr-2"
+                        disabled={deleteLoading}
+                        onClick={async () => { setDeleteLoading(true); try {
+                          const token = await user.getIdToken();
+                          const res = await fetch(
+                            `http://localhost:3001/api/orders/${selectedOrder.id}`,
+                            { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } }
+                          );
+                          if (res.ok) {
+                            removeOrderFromState(selectedOrder.id);
+                            setSelectedOrder(null);
+                          }
+                        } finally { setDeleteLoading(false); setDeleting(false); }}}
+                      >Yes, Delete</button>
+                      <button className="px-4 py-1 bg-gray-700 text-gray-200 rounded hover:bg-gray-600" onClick={() => setDeleting(false)} disabled={deleteLoading}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <form className="space-y-4" onSubmit={async e => { e.preventDefault(); setEditLoading(true); try {
+                const token = await user.getIdToken();
+                const res = await fetch(`http://localhost:3001/api/orders/${selectedOrder.id}`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                  body: JSON.stringify({
+                    pickup_location: editFields.pickup_location,
+                    drop_off_location: editFields.drop_off_location,
+                    weight: editFields.weight,
+                    size: editFields.size,
+                    scheduled_delivery_time: editFields.scheduled_delivery_time,
+                    delivery_fee: editFields.delivery_fee,
+                  })
+                });
+                if (res.ok) {
+                  const updatedOrder = await res.json();
+                  updateOrderInState(updatedOrder);
+                  setEditMode(false);
+                  setSelectedOrder(updatedOrder);
+                }
+              } finally { setEditLoading(false); }}}>
+                <div className="grid grid-cols-1 gap-2 text-gray-200">
+                  <div>
+                    <label className="block text-gray-400 text-sm">Pickup Address</label>
+                    <input
+                      ref={editPickupInputRef}
+                      type="text"
+                      className="w-full px-2 py-1 rounded border"
+                      value={editFields.pickup_location || ''}
+                      onChange={e => setEditFields(f => ({ ...f, pickup_location: e.target.value }))}
+                      required
+                      placeholder="Start typing address..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 text-sm">Dropoff Address</label>
+                    <input
+                      ref={editDropoffInputRef}
+                      type="text"
+                      className="w-full px-2 py-1 rounded border"
+                      value={editFields.drop_off_location || ''}
+                      onChange={e => setEditFields(f => ({ ...f, drop_off_location: e.target.value }))}
+                      required
+                      placeholder="Start typing address..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 text-sm">Weight (kg)</label>
+                    <input type="number" className="w-full px-2 py-1 rounded border" value={editFields.weight || ''} onChange={e=>setEditFields(f=>({...f,weight: e.target.value}))} min={0} step={0.01} required />
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 text-sm">Size</label>
+                    <select className="w-full px-2 py-1 rounded border" value={editFields.size || ''} onChange={e=>setEditFields(f=>({...f,size: e.target.value}))} >
+                      <option value="">Select size</option>
+                      <option value="small">Small</option>
+                      <option value="medium">Medium</option>
+                      <option value="large">Large</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 text-sm">Scheduled (YYYY-MM-DD HH:MM)</label>
+                    <input type="datetime-local" className="w-full px-2 py-1 rounded border" value={editFields.scheduled_delivery_time ? editFields.scheduled_delivery_time.slice(0,16) : ''} onChange={e=>setEditFields(f=>({...f,scheduled_delivery_time:e.target.value}))} />
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 text-sm">Delivery Fee (₱) <span className="text-red-400">*</span></label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className="w-full px-2 py-1 rounded border"
+                      value={editMode ? (editFields.delivery_fee || '') : (formData.deliveryFee || '')}
+                      onChange={editMode
+                        ? e => setEditFields(f => ({ ...f, delivery_fee: e.target.value }))
+                        : e=> setFormData(f=>({ ...f, deliveryFee: e.target.value }))}
+                      required
+                      placeholder="Input agreed delivery fee"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 text-sm">Commission (₱)</label>
+                    <div className="w-full px-2 py-1 rounded border bg-gray-800 text-white">10.00</div>
+                  </div>
+                </div>
+                <div className="my-4">
+                  <div className="mb-2 text-sm text-blue-400 font-semibold">Route Preview:</div>
+                  <div
+                    ref={orderDetailMapRef}
+                    style={{ width: '100%', height: 260, borderRadius: 8, border: '1px solid #334155', background: '#232946' }}
+                  />
+                  {(!editFields.pickup_location || !editFields.drop_off_location) && (
+                    <div className="mt-3 text-sm text-gray-400">Both pickup and dropoff addresses are required for route preview.</div>
+                  )}
+                </div>
+                <div className="flex gap-2 mt-4">
+                  <button type="submit" className="px-4 py-1 bg-green-700 text-green-100 rounded hover:bg-green-600" disabled={editLoading}>{editLoading ? 'Saving...' : 'Save'}</button>
+                  <button type="button" className="px-4 py-1 bg-gray-700 text-gray-200 rounded hover:bg-gray-600" onClick={()=>{setEditMode(false);setEditFields({});}} disabled={editLoading}>Cancel</button>
+                </div>
+              </form>
+            )}
+          </div>
+        ) : orders.length === 0 ? (
+          <div className="bg-gray-800 rounded-lg border border-gray-700 p-12 text-center">
+            <svg className="mx-auto h-16 w-16 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <p className="mt-4 text-gray-400">No orders yet. Create your first order to get started!</p>
+          </div>
+        ) : (
+          renderGroupedOrders()
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default BusinessOwnerOrders;
+
