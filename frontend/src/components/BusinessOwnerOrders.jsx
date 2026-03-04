@@ -45,6 +45,12 @@ const BusinessOwnerOrders = () => {
   const [availableDrivers, setAvailableDrivers] = useState([]);
   const [assigningDriver, setAssigningDriver] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [statusLog, setStatusLog] = useState([]);
+  const [loadingLog, setLoadingLog] = useState(false);
+  const [showOptimize, setShowOptimize] = useState(false);
+  const [selectedForOptimize, setSelectedForOptimize] = useState([]);
+  const [optimizing, setOptimizing] = useState(false);
+  const [optimizationResult, setOptimizationResult] = useState(null);
   // Helper to update orders in-place
   const updateOrderInState = updated => setOrders(orders => orders.map(o => o.order_id === updated.order_id ? updated : o));
   const removeOrderFromState = id => setOrders(orders => orders.filter(o => o.order_id !== id));
@@ -114,6 +120,56 @@ const BusinessOwnerOrders = () => {
       toast.error('Failed to update status');
     } finally {
       setUpdatingStatus(false);
+    }
+  };
+
+  // Fetch tracking status log for an order
+  const fetchStatusLog = async (orderId) => {
+    setLoadingLog(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch(`http://localhost:3001/api/tracking/${orderId}/status-log`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setStatusLog(data);
+      } else {
+        setStatusLog([]);
+      }
+    } catch (err) {
+      setStatusLog([]);
+    } finally {
+      setLoadingLog(false);
+    }
+  };
+
+  // Route optimization
+  const handleOptimizeRoutes = async () => {
+    if (selectedForOptimize.length < 2) {
+      toast.error('Select at least 2 orders to optimize');
+      return;
+    }
+    setOptimizing(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch('http://localhost:3001/api/routes/optimize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ orderIds: selectedForOptimize })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setOptimizationResult(data);
+        toast.success('Routes optimized successfully!');
+      } else {
+        const err = await res.json();
+        toast.error(err.error || 'Failed to optimize routes');
+      }
+    } catch (err) {
+      toast.error('Failed to optimize routes');
+    } finally {
+      setOptimizing(false);
     }
   };
 
@@ -701,6 +757,8 @@ const BusinessOwnerOrders = () => {
       }
     };
     showMapForOrder();
+    // Fetch tracking log when order is selected
+    if (selectedOrder) fetchStatusLog(selectedOrder.order_id);
   }, [selectedOrder]);
 
   // Group rendering refactored into function
@@ -1255,9 +1313,84 @@ const BusinessOwnerOrders = () => {
         </div>
       )}
 
+      {/* Route Optimization */}
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-semibold text-white">Recent Orders</h3>
+          <button
+            onClick={() => { setShowOptimize(!showOptimize); setOptimizationResult(null); setSelectedForOptimize([]); }}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+              showOptimize ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+            </svg>
+            {showOptimize ? 'Cancel Optimization' : 'Optimize Routes'}
+          </button>
+        </div>
+
+        {showOptimize && (
+          <div className="bg-gray-800 border border-purple-500/50 rounded-lg p-4 mb-4">
+            <p className="text-sm text-gray-300 mb-3">Select orders to include in route optimization (minimum 2):</p>
+            <div className="space-y-2 max-h-48 overflow-y-auto mb-4">
+              {orders.filter(o => o.order_status === 'pending' || o.order_status === 'assigned').map(order => (
+                <label key={order.order_id} className="flex items-center gap-3 p-2 rounded hover:bg-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedForOptimize.includes(order.order_id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedForOptimize(prev => [...prev, order.order_id]);
+                      } else {
+                        setSelectedForOptimize(prev => prev.filter(id => id !== order.order_id));
+                      }
+                    }}
+                    className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-purple-500"
+                  />
+                  <span className="text-white text-sm">#{order.order_id} - {order.customer_name || 'Unknown'}</span>
+                  <span className="text-gray-400 text-xs truncate">{order.drop_off_location}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleOptimizeRoutes}
+                disabled={optimizing || selectedForOptimize.length < 2}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                {optimizing ? 'Optimizing...' : `Optimize ${selectedForOptimize.length} Orders`}
+              </button>
+              <span className="text-xs text-gray-400">{selectedForOptimize.length} selected</span>
+            </div>
+
+            {optimizationResult && (
+              <div className="mt-4 p-3 bg-gray-900 rounded-lg border border-green-500/30">
+                <h4 className="text-green-400 font-medium text-sm mb-2">Optimized Route Order:</h4>
+                <div className="space-y-1">
+                  {optimizationResult.optimized_order.map((stop) => (
+                    <div key={stop.order_id} className="flex items-center gap-2 text-sm">
+                      <span className="w-6 h-6 bg-purple-600 text-white rounded-full flex items-center justify-center text-xs font-bold">
+                        {stop.sequence}
+                      </span>
+                      <span className="text-white">{stop.customer_name}</span>
+                      <span className="text-gray-400 text-xs truncate">{stop.drop_off_location}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 flex gap-4 text-xs text-gray-400">
+                  <span>Total stops: {optimizationResult.total_stops}</span>
+                  <span>Est. distance: {optimizationResult.estimated_distance_km} km</span>
+                  <span className="text-green-400">~{optimizationResult.estimated_savings_percent}% savings</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Orders List */}
       <div>
-        <h3 className="text-lg font-semibold text-white mb-4">Recent Orders</h3>
         {selectedOrder ? (
           <div className="bg-gray-900 rounded-lg border border-blue-500 p-8 shadow-xl max-w-xl mx-auto">
             <button
@@ -1343,6 +1476,42 @@ const BusinessOwnerOrders = () => {
                     <div className="mt-3 text-sm text-gray-400">No map data available for this order.</div>
                   )}
                 </div>
+
+                {/* Tracking Timeline */}
+                <div className="mt-6">
+                  <div className="mb-2 text-sm text-blue-400 font-semibold">Delivery Status Timeline:</div>
+                  {loadingLog ? (
+                    <div className="text-gray-400 text-sm animate-pulse">Loading timeline...</div>
+                  ) : statusLog.length > 0 ? (
+                    <div className="relative pl-6 space-y-3">
+                      {statusLog.map((log, idx) => (
+                        <div key={log.status_log_id || idx} className="relative">
+                          <div className={`absolute -left-6 top-1 w-3 h-3 rounded-full border-2 ${
+                            idx === statusLog.length - 1
+                              ? 'bg-blue-500 border-blue-400'
+                              : 'bg-gray-600 border-gray-500'
+                          }`} />
+                          {idx < statusLog.length - 1 && (
+                            <div className="absolute -left-[18px] top-4 w-0.5 h-full bg-gray-700" />
+                          )}
+                          <div className="flex justify-between items-center">
+                            <span className={`text-sm font-medium ${
+                              idx === statusLog.length - 1 ? 'text-blue-300' : 'text-gray-300'
+                            }`}>
+                              {log.status?.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              {log.timestamp ? new Date(log.timestamp).toLocaleString() : ''}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-gray-500 text-sm">No status updates recorded yet.</div>
+                  )}
+                </div>
+
                 {deleting && (
                   <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-40">
                     <div className="bg-gray-900 border border-red-700 rounded-lg p-8 max-w-xs text-center">

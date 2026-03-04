@@ -62,10 +62,18 @@ const authRoutes = require('./routes/auth');
 const ordersRoutes = require('./routes/orders');
 const billingRoutes = require('./routes/billing');
 const driversRoutes = require('./routes/drivers');
+const routeOptimizationRoutes = require('./routes/routeOptimization');
+const trackingRoutes = require('./routes/tracking');
+const issuesRoutes = require('./routes/issues');
+const aiAnalyticsRoutes = require('./routes/ai-analytics');
 app.use('/api/auth', authRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/drivers', driversRoutes);
+app.use('/api/routes', routeOptimizationRoutes);
+app.use('/api/tracking', trackingRoutes);
+app.use('/api/issues', issuesRoutes);
+app.use('/api/ai-analytics', aiAnalyticsRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
