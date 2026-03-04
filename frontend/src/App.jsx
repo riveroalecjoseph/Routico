@@ -1,6 +1,7 @@
 import React from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './auth/AuthContext'
+import { ToastProvider } from './components/Toast'
 import HomePage from './pages/HomePage'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
@@ -74,6 +75,7 @@ const SuspendedLayout = ({ children }) => {
 function App() {
   return (
     <AuthProvider>
+      <ToastProvider>
       <Router>
         <div className="App">
           <Routes>
@@ -143,6 +145,7 @@ function App() {
           </Routes>
         </div>
       </Router>
+      </ToastProvider>
     </AuthProvider>
   )
 }

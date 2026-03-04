@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../auth/AuthContext';
+import { useToast } from './Toast';
 
 const RestrictedBillingAccess = () => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [currentSubscription, setCurrentSubscription] = useState(null);
   const [billingHistory, setBillingHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -66,14 +68,14 @@ const RestrictedBillingAccess = () => {
     }
 
     if (file.type !== 'application/pdf' && file.type !== 'image/jpeg' && file.type !== 'image/png') {
-      alert('Please upload a PDF, JPEG, or PNG file.');
+      toast.warning('Please upload a PDF, JPEG, or PNG file.');
       setSelectedFile(null);
       event.target.value = '';
       return;
     }
 
     if (file.size > 5 * 1024 * 1024) { // 5MB limit
-      alert('File size must be less than 5MB.');
+      toast.warning('File size must be less than 5MB.');
       setSelectedFile(null);
       event.target.value = '';
       return;
@@ -84,7 +86,7 @@ const RestrictedBillingAccess = () => {
 
   const handleSubmitPayment = async () => {
     if (!selectedFile) {
-      alert('Please select a file first.');
+      toast.warning('Please select a file first.');
       return;
     }
 
@@ -104,16 +106,16 @@ const RestrictedBillingAccess = () => {
       });
 
       if (response.ok) {
-        alert('Payment proof uploaded successfully! Our team will review it shortly.');
+        toast.success('Payment proof uploaded successfully! Our team will review it shortly.');
         setSelectedFile(null);
         await fetchBillingData(); // Refresh data
       } else {
         const errorData = await response.json();
-        alert(`Error uploading payment proof: ${errorData.error}`);
+        toast.error(`Error uploading payment proof: ${errorData.error}`);
       }
     } catch (error) {
       console.error('Error uploading payment proof:', error);
-      alert('Error uploading payment proof. Please try again.');
+      toast.error('Error uploading payment proof. Please try again.');
     } finally {
       setUploading(false);
     }

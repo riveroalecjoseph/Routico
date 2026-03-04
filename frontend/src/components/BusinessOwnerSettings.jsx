@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
+import { useToast } from './Toast';
 
 const BusinessOwnerSettings = () => {
   const { user } = useAuth();
+  const { toast } = useToast();
   
   // Initialize with simple defaults first
   const [settings, setSettings] = useState({
@@ -72,13 +74,13 @@ const BusinessOwnerSettings = () => {
 
     // Validate file size
     if (file.size > 5 * 1024 * 1024) {
-      alert('File size must be less than 5MB');
+      toast.warning('File size must be less than 5MB');
       return;
     }
 
     // Validate file type
     if (!file.type.startsWith('image/')) {
-      alert('Please upload an image file');
+      toast.warning('Please upload an image file');
       return;
     }
 
@@ -138,7 +140,7 @@ const BusinessOwnerSettings = () => {
       setTimeout(() => setSaved(false), 3000);
     } catch (error) {
       console.error('Error saving settings:', error);
-      alert('Failed to save settings');
+      toast.error('Failed to save settings');
     }
   };
 

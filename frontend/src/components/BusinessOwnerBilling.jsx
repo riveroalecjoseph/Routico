@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../auth/AuthContext';
+import { useToast } from './Toast';
 
 const BusinessOwnerBilling = () => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [statements, setStatements] = useState([]);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
@@ -74,7 +76,7 @@ const BusinessOwnerBilling = () => {
     const file = e.target.files[0];
     if (file) {
       if (file.size > 5 * 1024 * 1024) {
-        alert('File size must be less than 5MB');
+        toast.warning('File size must be less than 5MB');
         return;
       }
       setSelectedFile(file);
@@ -85,12 +87,12 @@ const BusinessOwnerBilling = () => {
     e.preventDefault();
     
     if (!selectedFile) {
-      alert('Please select a payment proof file');
+      toast.warning('Please select a payment proof file');
       return;
     }
 
     if (!paymentAmount || parseFloat(paymentAmount) <= 0) {
-      alert('Please enter a valid payment amount');
+      toast.warning('Please enter a valid payment amount');
       return;
     }
 
@@ -156,11 +158,11 @@ const BusinessOwnerBilling = () => {
       } else {
         const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
         console.error('CSV download error:', errorData);
-        alert(`Failed to download CSV: ${errorData.error || 'Unknown error'}`);
+        toast.error(`Failed to download CSV: ${errorData.error || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('Error downloading CSV:', error);
-      alert(`Error downloading CSV: ${error.message}`);
+      toast.error(`Error downloading CSV: ${error.message}`);
     }
   };
 
@@ -187,11 +189,11 @@ const BusinessOwnerBilling = () => {
       } else {
         const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
         console.error('PDF download error:', errorData);
-        alert(`Failed to download PDF: ${errorData.error || 'Unknown error'}`);
+        toast.error(`Failed to download PDF: ${errorData.error || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('Error downloading PDF:', error);
-      alert(`Error downloading PDF: ${error.message}`);
+      toast.error(`Error downloading PDF: ${error.message}`);
     }
   };
 

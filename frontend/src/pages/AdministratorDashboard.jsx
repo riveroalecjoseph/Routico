@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
+import { useToast } from '../components/Toast';
 import AdministratorBillingCharts from '../components/AdministratorBillingCharts';
 import AdministratorCharts from '../components/AdministratorCharts';
 import AdministratorPaymentReview from '../components/AdministratorPaymentReview';
@@ -9,6 +10,7 @@ import Header from '../components/Header';
 
 const AdministratorDashboard = () => {
   const { user, getToken } = useAuth();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [stats, setStats] = useState({
@@ -88,14 +90,14 @@ const AdministratorDashboard = () => {
         // Update local state
         setPendingUsers(prev => prev.filter(user => user.user_id !== userId));
         setStats(prev => ({ ...prev, pendingApprovals: prev.pendingApprovals - 1, activeBusinesses: prev.activeBusinesses + 1 }));
-        alert('User approved successfully!');
+        toast.success('User approved successfully!');
       } else {
         const errorData = await response.json();
-        alert(`Error approving user: ${errorData.error}`);
+        toast.error(`Error approving user: ${errorData.error}`);
       }
     } catch (error) {
       console.error('Error approving user:', error);
-      alert('Error approving user. Please try again.');
+      toast.error('Error approving user. Please try again.');
     }
   };
 
@@ -117,10 +119,10 @@ const AdministratorDashboard = () => {
         // Update local state
         setPendingUsers(prev => prev.filter(user => user.user_id !== userId));
         setStats(prev => ({ ...prev, pendingApprovals: prev.pendingApprovals - 1 }));
-        alert('User rejected successfully!');
+        toast.success('User rejected successfully!');
       } else {
         const errorData = await response.json();
-        alert(`Error rejecting user: ${errorData.error}`);
+        toast.error(`Error rejecting user: ${errorData.error}`);
       }
     } catch (error) {
       console.error('Error rejecting user:', error);
@@ -151,11 +153,11 @@ const AdministratorDashboard = () => {
         window.URL.revokeObjectURL(url);
       } else {
         const errorData = await response.json();
-        alert(`Error downloading document: ${errorData.error}`);
+        toast.error(`Error downloading document: ${errorData.error}`);
       }
     } catch (error) {
       console.error('Error downloading document:', error);
-      alert('Error downloading document. Please try again.');
+      toast.error('Error downloading document. Please try again.');
     }
   };
 

@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../auth/AuthContext';
+import { useToast } from './Toast';
 import { format, isToday, isAfter, parseISO } from 'date-fns';
 
 const BusinessOwnerOrders = () => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -87,8 +89,8 @@ const BusinessOwnerOrders = () => {
 
   useEffect(() => {
     // Initialize Google Maps when component mounts
-    // Use Firebase API key (same key works for Google Maps)
-    const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
+    // Use dedicated Google Maps API key, fallback to Firebase API key
+    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || import.meta.env.VITE_FIREBASE_API_KEY;
     
     console.log('VITE_FIREBASE_API_KEY exists:', !!apiKey);
     if (apiKey) {
@@ -472,15 +474,15 @@ const BusinessOwnerOrders = () => {
         setOrders(prev => [...prev, newOrder]);
         resetForm();
         setShowCreateForm(false);
-        alert('Order created successfully!');
+        toast.success('Order created successfully!');
       } else {
         const error = await response.json();
         console.error('Backend error:', error);
-        alert(`Error creating order: ${error.message || error.error || 'Unknown error'}`);
+        toast.error(`Error creating order: ${error.message || error.error || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('Error creating order:', error);
-      alert(`Error creating order: ${error.message || 'Please try again.'}`);
+      toast.error(`Error creating order: ${error.message || 'Please try again.'}`);
     } finally {
       setLoading(false);
     }

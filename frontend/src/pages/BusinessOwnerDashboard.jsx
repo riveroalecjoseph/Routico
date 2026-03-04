@@ -87,8 +87,9 @@ const BusinessOwnerDashboard = () => {
         statsData = await statsResponse.json();
       }
 
-      // Load active drivers from localStorage
-      const driversJson = localStorage.getItem('routicoDrivers');
+      // Load active drivers from localStorage (user-specific key)
+      const storageKey = user?.uid ? `routicoDrivers_${user.uid}` : 'routicoDrivers';
+      const driversJson = localStorage.getItem(storageKey);
       if (driversJson) {
         try {
           const drivers = JSON.parse(driversJson);

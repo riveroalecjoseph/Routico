@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../auth/AuthContext';
+import { useToast } from './Toast';
 
 const AdministratorPaymentReview = () => {
   const { user } = useAuth();
+  const { toast, confirm: confirmDialog } = useToast();
   const [activeTab, setActiveTab] = useState('all-accounts');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -95,7 +97,7 @@ const AdministratorPaymentReview = () => {
   };
 
   const handleApprovePayment = async (statementId) => {
-    if (!confirm('Are you sure you want to approve this payment?')) return;
+    if (!await confirmDialog('Are you sure you want to approve this payment?')) return;
 
     try {
       const token = await user.getIdToken();
@@ -127,7 +129,7 @@ const AdministratorPaymentReview = () => {
   };
 
   const handleRejectPayment = async (statementId) => {
-    if (!confirm('Are you sure you want to reject this payment? The account will remain overdue.')) return;
+    if (!await confirmDialog('Are you sure you want to reject this payment? The account will remain overdue.')) return;
 
     try {
       const token = await user.getIdToken();
@@ -172,21 +174,21 @@ const AdministratorPaymentReview = () => {
         setTimeout(() => window.URL.revokeObjectURL(url), 1000);
       } else {
         const errorData = await response.json().catch(() => ({ error: 'No payment proof found' }));
-        alert(errorData.error || 'No payment proof uploaded');
+        toast.error(errorData.error || 'No payment proof uploaded');
       }
     } catch (error) {
       console.error('Error viewing payment proof:', error);
-      alert('Error loading payment proof');
+      toast.error('Error loading payment proof');
     }
   };
 
   const handleBulkSuspend = async () => {
     if (selectedStatements.length === 0) {
-      alert('Please select accounts to suspend');
+      toast.warning('Please select accounts to suspend');
       return;
     }
 
-    if (!confirm(`Are you sure you want to suspend ${selectedStatements.length} account(s)? This will prevent them from accessing the system.`)) {
+    if (!await confirmDialog(`Are you sure you want to suspend ${selectedStatements.length} account(s)? This will prevent them from accessing the system.`)) {
       return;
     }
 

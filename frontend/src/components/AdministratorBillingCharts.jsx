@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../auth/AuthContext';
+import { useToast } from './Toast';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -29,6 +30,7 @@ ChartJS.register(
 
 const AdministratorBillingCharts = () => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [billingStats, setBillingStats] = useState({
     totalRevenue: 0,
@@ -120,15 +122,15 @@ const AdministratorBillingCharts = () => {
       });
 
       if (response.ok) {
-        alert('Payment approved successfully!');
+        toast.success('Payment approved successfully!');
         fetchBillingData(); // Refresh data
       } else {
         const errorData = await response.json();
-        alert(`Error approving payment: ${errorData.error}`);
+        toast.error(`Error approving payment: ${errorData.error}`);
       }
     } catch (error) {
       console.error('Error approving payment:', error);
-      alert('Error approving payment. Please try again.');
+      toast.error('Error approving payment. Please try again.');
     }
   };
 
@@ -144,15 +146,15 @@ const AdministratorBillingCharts = () => {
       });
 
       if (response.ok) {
-        alert('Payment rejected successfully!');
+        toast.success('Payment rejected successfully!');
         fetchBillingData(); // Refresh data
       } else {
         const errorData = await response.json();
-        alert(`Error rejecting payment: ${errorData.error}`);
+        toast.error(`Error rejecting payment: ${errorData.error}`);
       }
     } catch (error) {
       console.error('Error rejecting payment:', error);
-      alert('Error rejecting payment. Please try again.');
+      toast.error('Error rejecting payment. Please try again.');
     }
   };
 
@@ -174,11 +176,11 @@ const AdministratorBillingCharts = () => {
         setTimeout(() => window.URL.revokeObjectURL(url), 1000);
       } else {
         const errorData = await response.json();
-        alert(`Error loading document: ${errorData.error}`);
+        toast.error(`Error loading document: ${errorData.error}`);
       }
     } catch (error) {
       console.error('Error loading document:', error);
-      alert('Error loading document. Please try again.');
+      toast.error('Error loading document. Please try again.');
     }
   };
 

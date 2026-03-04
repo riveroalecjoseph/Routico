@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
+import { useToast } from './Toast';
 
 const AdministratorUserManagement = () => {
   const { user, getToken, isAdmin } = useAuth();
+  const { toast, confirm: confirmDialog } = useToast();
   const [activeView, setActiveView] = useState('pending');
   const [pendingUsers, setPendingUsers] = useState([]);
   const [activeUsers, setActiveUsers] = useState([]);
@@ -91,19 +93,19 @@ const AdministratorUserManagement = () => {
       if (response.ok) {
         setPendingUsers(prev => prev.filter(user => user.user_id !== userId));
         await fetchUserData(); // Refresh data
-        alert('User approved successfully!');
+        toast.success('User approved successfully!');
       } else {
         const errorData = await response.json();
-        alert(`Error approving user: ${errorData.error}`);
+        toast.error(`Error approving user: ${errorData.error}`);
       }
     } catch (error) {
       console.error('Error approving user:', error);
-      alert('Error approving user. Please try again.');
+      toast.error('Error approving user. Please try again.');
     }
   };
 
   const handleRejectUser = async (userId) => {
-    if (!confirm('Are you sure you want to reject this user? This action cannot be undone.')) {
+    if (!await confirmDialog('Are you sure you want to reject this user? This action cannot be undone.')) {
       return;
     }
 
@@ -123,14 +125,14 @@ const AdministratorUserManagement = () => {
       if (response.ok) {
         setPendingUsers(prev => prev.filter(user => user.user_id !== userId));
         await fetchUserData(); // Refresh data
-        alert('User rejected successfully!');
+        toast.success('User rejected successfully!');
       } else {
         const errorData = await response.json();
-        alert(`Error rejecting user: ${errorData.error}`);
+        toast.error(`Error rejecting user: ${errorData.error}`);
       }
     } catch (error) {
       console.error('Error rejecting user:', error);
-      alert('Error rejecting user. Please try again.');
+      toast.error('Error rejecting user. Please try again.');
     }
   };
 
@@ -150,22 +152,22 @@ const AdministratorUserManagement = () => {
 
       if (response.ok) {
         await fetchUserData(); // Refresh data
-        alert('User account suspended successfully!');
+        toast.success('User account suspended successfully!');
         setShowSuspendModal(false);
         setSuspendReason('');
         setSelectedUser(null);
       } else {
         const errorData = await response.json();
-        alert(`Error suspending user: ${errorData.error}`);
+        toast.error(`Error suspending user: ${errorData.error}`);
       }
     } catch (error) {
       console.error('Error suspending user:', error);
-      alert('Error suspending user. Please try again.');
+      toast.error('Error suspending user. Please try again.');
     }
   };
 
   const handleReactivateUser = async (userId) => {
-    if (!confirm('Are you sure you want to reactivate this user account?')) {
+    if (!await confirmDialog('Are you sure you want to reactivate this user account?')) {
       return;
     }
 
@@ -181,14 +183,14 @@ const AdministratorUserManagement = () => {
 
       if (response.ok) {
         await fetchUserData(); // Refresh data
-        alert('User account reactivated successfully!');
+        toast.success('User account reactivated successfully!');
       } else {
         const errorData = await response.json();
-        alert(`Error reactivating user: ${errorData.error}`);
+        toast.error(`Error reactivating user: ${errorData.error}`);
       }
     } catch (error) {
       console.error('Error reactivating user:', error);
-      alert('Error reactivating user. Please try again.');
+      toast.error('Error reactivating user. Please try again.');
     }
   };
 
@@ -210,11 +212,11 @@ const AdministratorUserManagement = () => {
         setTimeout(() => window.URL.revokeObjectURL(url), 1000);
       } else {
         const errorData = await response.json();
-        alert(`Error loading document: ${errorData.error}`);
+        toast.error(`Error loading document: ${errorData.error}`);
       }
     } catch (error) {
       console.error('Error loading document:', error);
-      alert('Error loading document. Please try again.');
+      toast.error('Error loading document. Please try again.');
     }
   };
 

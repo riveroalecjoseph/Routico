@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
+import { useToast } from './Toast';
 
 const BusinessOwnerDrivers = () => {
   const { user } = useAuth();
+  const { toast, confirm } = useToast();
   const [drivers, setDrivers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -19,15 +21,17 @@ const BusinessOwnerDrivers = () => {
     ridesCompleted: ''
   });
 
+  const storageKey = user?.uid ? `routicoDrivers_${user.uid}` : 'routicoDrivers';
+
   useEffect(() => {
     fetchDrivers();
-  }, []);
+  }, [user]);
 
   const fetchDrivers = async () => {
     setLoading(true);
     try {
-      // Load drivers from localStorage
-      const savedDrivers = localStorage.getItem('routicoDrivers');
+      // Load drivers from localStorage (user-specific key)
+      const savedDrivers = localStorage.getItem(storageKey);
       if (savedDrivers) {
         setDrivers(JSON.parse(savedDrivers));
       } else {
@@ -44,7 +48,7 @@ const BusinessOwnerDrivers = () => {
 
   const saveDrivers = (updatedDrivers) => {
     try {
-      localStorage.setItem('routicoDrivers', JSON.stringify(updatedDrivers));
+      localStorage.setItem(storageKey, JSON.stringify(updatedDrivers));
       // Dispatch event to notify other components of driver updates
       window.dispatchEvent(new CustomEvent('driversUpdated', { detail: { drivers: updatedDrivers } }));
       console.log('Drivers saved to localStorage');
@@ -63,7 +67,7 @@ const BusinessOwnerDrivers = () => {
 
   const handleAddDriver = async () => {
     if (!formData.firstName || !formData.lastName || !formData.email || !formData.phone) {
-      alert('Please fill in all required fields');
+      toast.warning('Please fill in all required fields');
       return;
     }
 
@@ -111,7 +115,7 @@ const BusinessOwnerDrivers = () => {
       setShowAddDriver(false);
       setEditingId(null);
     } catch (err) {
-      alert('Failed to save driver');
+      toast.error('Failed to save driver');
       console.error(err);
     }
   };
@@ -144,8 +148,8 @@ const BusinessOwnerDrivers = () => {
     setShowAddDriver(false);
   }
 
-  const handleDeactivateDriver = (id) => {
-    if (window.confirm('Are you sure you want to remove this driver?')) {
+  const handleDeactivateDriver = async (id) => {
+    if (await confirm('Are you sure you want to remove this driver?')) {
       // Remove from local state
       const updatedDrivers = drivers.filter(driver => driver.id !== id);
       setDrivers(updatedDrivers);

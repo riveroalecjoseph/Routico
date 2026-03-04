@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
+import { useToast } from '../components/Toast';
 import { useNavigate, Link } from 'react-router-dom';
 
 const RegisterPage = () => {
   const { signUp, user, userRole } = useAuth();
+  const { toast } = useToast();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -68,7 +70,7 @@ const RegisterPage = () => {
         companyDocument: formData.companyDocument
       });
 
-      alert('Registration successful! Your account is pending approval from Routico administrators.');
+      toast.success('Registration successful! Your account is pending approval from Routico administrators.');
       
       // Small delay to ensure user data is fetched
       setTimeout(() => {
