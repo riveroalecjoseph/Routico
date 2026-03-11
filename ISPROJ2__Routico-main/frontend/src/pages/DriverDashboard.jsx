@@ -5,7 +5,6 @@ import DriverIssues from '../components/DriverIssues';
 import DriverSettings from '../components/DriverSettings';
 import BusinessOwnerCharts from '../components/BusinessOwnerCharts';
 import Header from '../components/Header';
-import Footer from '../components/Footer';
 
 const DriverDashboard = () => {
   const { user, getToken, hasPermission } = useAuth();
@@ -85,29 +84,50 @@ const DriverDashboard = () => {
 
   const tabInfo = getTabTitle();
 
+  // Group menu items by section
+  const generalItems = menuItems.filter(item => item.id === 'orders');
+  const toolsItems = menuItems.filter(item => item.id === 'issues' || item.id === 'analytics');
+  const accountItems = menuItems.filter(item => item.id === 'settings');
+
+  const renderMenuItem = (item) => (
+    <button
+      key={item.id}
+      onClick={() => setActiveTab(item.id)}
+      className={`w-full flex items-center ${sidebarOpen ? 'px-4' : 'justify-center px-2'} py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
+        activeTab === item.id
+          ? 'bg-blue-600/15 text-blue-400 border-r-2 border-blue-400'
+          : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+      }`}
+      title={!sidebarOpen ? item.label : undefined}
+    >
+      {getIcon(item.icon)}
+      {sidebarOpen && <span className="ml-3">{item.label}</span>}
+    </button>
+  );
+
   return (
-    <div className="min-h-screen flex bg-gray-900">
+    <div className="min-h-screen flex bg-[#0a0f1a]">
       {/* Sidebar */}
-      <div className={`${sidebarOpen ? 'w-64' : 'w-20'} bg-gray-800 border-r border-gray-700 transition-all duration-300 ease-in-out flex flex-col sticky top-0 h-screen overflow-hidden`}>
-        {/* Sidebar Header */}
-        <div className="p-4 border-b border-gray-700 flex items-center justify-between">
+      <div className={`${sidebarOpen ? 'w-64' : 'w-20'} bg-[#0c1222] border-r border-white/5 transition-all duration-300 ease-in-out flex flex-col sticky top-0 h-screen overflow-hidden`}>
+        {/* Sidebar Header - Logo */}
+        <div className="p-4 flex items-center justify-between">
           {sidebarOpen && (
             <div className="flex items-center space-x-3">
-              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+              <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-600/20">
                 <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z" />
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0" />
                 </svg>
               </div>
               <div>
-                <h1 className="text-white font-bold text-lg">Routico</h1>
-                <p className="text-gray-400 text-xs">Driver Portal</p>
+                <h1 className="text-white font-bold text-lg leading-tight">Routico</h1>
+                <p className="text-gray-500 text-xs">Driver Portal</p>
               </div>
             </div>
           )}
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-700"
+            className="text-gray-500 hover:text-gray-300 p-1.5 rounded-lg hover:bg-white/5 transition-colors"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
@@ -116,30 +136,48 @@ const DriverDashboard = () => {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {menuItems.map(item => (
-            <button
-              key={item.id}
-              onClick={() => setActiveTab(item.id)}
-              className={`w-full flex items-center ${sidebarOpen ? 'px-3' : 'justify-center px-2'} py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
-                activeTab === item.id
-                  ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
-                  : 'text-gray-300 hover:bg-gray-700/50 hover:text-white'
-              }`}
-              title={!sidebarOpen ? item.label : undefined}
-            >
-              {getIcon(item.icon)}
-              {sidebarOpen && <span className="ml-3">{item.label}</span>}
-            </button>
-          ))}
+        <nav className="flex-1 px-3 overflow-y-auto">
+          {/* GENERAL Section */}
+          {sidebarOpen && (
+            <p className="text-[10px] font-semibold tracking-widest text-gray-600 uppercase px-4 mb-2 mt-6">
+              General
+            </p>
+          )}
+          <div className="space-y-1">
+            {generalItems.map(renderMenuItem)}
+          </div>
+
+          {/* TOOLS Section */}
+          {toolsItems.length > 0 && (
+            <>
+              {sidebarOpen && (
+                <p className="text-[10px] font-semibold tracking-widest text-gray-600 uppercase px-4 mb-2 mt-6">
+                  Tools
+                </p>
+              )}
+              <div className="space-y-1">
+                {toolsItems.map(renderMenuItem)}
+              </div>
+            </>
+          )}
+
+          {/* ACCOUNT Section */}
+          {sidebarOpen && (
+            <p className="text-[10px] font-semibold tracking-widest text-gray-600 uppercase px-4 mb-2 mt-6">
+              Account
+            </p>
+          )}
+          <div className="space-y-1">
+            {accountItems.map(renderMenuItem)}
+          </div>
         </nav>
 
         {/* User Info */}
         {sidebarOpen && (
-          <div className="p-4 border-t border-gray-700">
+          <div className="p-4 border-t border-white/5">
             <div className="flex items-center space-x-3">
-              <div className="w-8 h-8 bg-green-600 rounded-full flex items-center justify-center">
-                <span className="text-white text-sm font-medium">
+              <div className="w-9 h-9 bg-gradient-to-br from-green-400 to-emerald-600 rounded-full flex items-center justify-center shadow-lg shadow-green-600/20">
+                <span className="text-white text-sm font-semibold">
                   {driverProfile ? `${driverProfile.first_name?.charAt(0)}${driverProfile.last_name?.charAt(0)}` : 'D'}
                 </span>
               </div>
@@ -147,9 +185,9 @@ const DriverDashboard = () => {
                 <p className="text-sm text-white font-medium truncate">
                   {driverProfile ? `${driverProfile.first_name} ${driverProfile.last_name}` : 'Driver'}
                 </p>
-                <p className="text-xs text-gray-400 truncate">{user?.email}</p>
+                <p className="text-xs text-gray-500 truncate">{user?.email}</p>
                 {driverProfile?.company_name && (
-                  <p className="text-xs text-blue-400 truncate">{driverProfile.company_name}</p>
+                  <p className="text-xs text-blue-400/80 truncate">{driverProfile.company_name}</p>
                 )}
               </div>
             </div>
@@ -158,14 +196,14 @@ const DriverDashboard = () => {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col min-h-screen bg-gray-900">
+      <div className="flex-1 flex flex-col min-h-screen bg-[#0a0f1a]">
         <Header />
         <div className="flex-1 overflow-y-auto">
           <div className="p-6 lg:p-8">
             {/* Page Title */}
             <div className="mb-8">
               <h2 className="text-3xl font-bold text-white">{tabInfo.title}</h2>
-              <p className="text-gray-400 mt-1">{tabInfo.subtitle}</p>
+              <p className="text-gray-500 mt-1">{tabInfo.subtitle}</p>
             </div>
 
             {/* Tab Content */}
@@ -175,7 +213,6 @@ const DriverDashboard = () => {
             {activeTab === 'settings' && <DriverSettings />}
           </div>
         </div>
-        <Footer />
       </div>
     </div>
   );

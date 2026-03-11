@@ -147,9 +147,9 @@ body {
   animation-delay: 4s;
 }
 
-/* Smooth Transitions */
-* {
-  transition: all 0.3s ease;
+/* Smooth Transitions - scoped to interactive elements only */
+button, a, input, select, textarea {
+  transition: all 0.2s ease;
 }
 
 /* Custom Scrollbar */
