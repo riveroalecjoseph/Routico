@@ -12,6 +12,7 @@ const fileStorageService = require('./services/fileStorageService');
 const PermissionCacheService = require('./services/permissionCacheService');
 const { runMigration } = require('./migrations/001_rbac_tables');
 const { runAuditLogMigration } = require('./migrations/002_audit_logs');
+const { runFleetMigration } = require('./migrations/003_fleet_management');
 const AuditLogService = require('./services/auditLogService');
 const path = require('path');
 
@@ -76,6 +77,7 @@ const issuesRoutes = require('./routes/issues');
 const aiAnalyticsRoutes = require('./routes/ai-analytics');
 const rolesRoutes = require('./routes/roles');
 const auditLogRoutes = require('./routes/auditLogs');
+const vehiclesRoutes = require('./routes/vehicles');
 app.use('/api/auth', authRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/billing', billingRoutes);
@@ -86,6 +88,7 @@ app.use('/api/issues', issuesRoutes);
 app.use('/api/ai-analytics', aiAnalyticsRoutes);
 app.use('/api/roles', rolesRoutes);
 app.use('/api/audit-logs', auditLogRoutes);
+app.use('/api/vehicles', vehiclesRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -115,6 +118,13 @@ async function startServer() {
       await runAuditLogMigration(db);
     } catch (migrationError) {
       console.error('Audit logs migration error:', migrationError);
+    }
+
+    // Run fleet management migration
+    try {
+      await runFleetMigration(db);
+    } catch (migrationError) {
+      console.error('Fleet management migration error:', migrationError);
     }
 
     // Initialize audit log service
