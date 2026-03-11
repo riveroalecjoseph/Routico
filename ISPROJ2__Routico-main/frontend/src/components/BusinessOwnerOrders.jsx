@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { useToast } from './Toast';
 import { format, isToday, isAfter, parseISO } from 'date-fns';
+import CascadingAddressSelector from './CascadingAddressSelector';
 
 const BusinessOwnerOrders = () => {
   const { user, getToken } = useAuth();
@@ -455,6 +456,7 @@ const BusinessOwnerOrders = () => {
     // Clear existing route
     if (window.DirectionsRenderer) {
       window.DirectionsRenderer.setMap(null);
+      window.DirectionsRenderer = null;
     }
 
     // Add pickup marker
@@ -568,6 +570,16 @@ const BusinessOwnerOrders = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (!formData.pickupAddress) {
+      toast.error('Please complete the pickup address (select at least region, province, and city).');
+      return;
+    }
+    if (!formData.dropoffAddress) {
+      toast.error('Please complete the dropoff address (select at least region, province, and city).');
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -655,6 +667,7 @@ const BusinessOwnerOrders = () => {
     }
     if (window.DirectionsRenderer) {
       window.DirectionsRenderer.setMap(null);
+      window.DirectionsRenderer = null;
     }
   };
 
@@ -1118,44 +1131,27 @@ const BusinessOwnerOrders = () => {
               </div>
             </div>
 
-            {/* Address Selection with Google Maps */}
+            {/* Address Selection with Cascading Dropdowns */}
             <div>
               <h4 className="text-lg font-semibold text-white mb-4">Delivery Addresses</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
-                <div>
-                  <label htmlFor="pickupAddress" className="block text-sm font-medium text-gray-300 mb-2">
-                    Pickup Address * {formData.pickupLocation && <span className="text-green-400">✓</span>}
-                  </label>
-                  <input
-                    ref={pickupInputRef}
-                    type="text"
-                    id="pickupAddress"
-                    name="pickupAddress"
+              <p className="text-sm text-gray-400 mb-4">Select region, province, then city to set the address. Add a street or barangay for more precision.</p>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-4">
+                <div className="bg-gray-700/30 rounded-xl p-4 border border-gray-700/50">
+                  <CascadingAddressSelector
+                    label="Pickup Address"
                     value={formData.pickupAddress}
-                    onChange={handleInputChange}
+                    onChange={(address) => setFormData(prev => ({ ...prev, pickupAddress: address }))}
+                    onLocationResolved={(loc) => setFormData(prev => ({ ...prev, pickupLocation: loc }))}
                     required
-                    placeholder="Start typing address..."
-                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-700 text-white ${
-                      formData.pickupLocation ? 'border-green-500' : 'border-gray-600'
-                    }`}
                   />
                 </div>
-                <div>
-                  <label htmlFor="dropoffAddress" className="block text-sm font-medium text-gray-300 mb-2">
-                    Dropoff Address * {formData.dropoffLocation && <span className="text-green-400">✓</span>}
-                  </label>
-                  <input
-                    ref={deliveryInputRef}
-                    type="text"
-                    id="dropoffAddress"
-                    name="dropoffAddress"
+                <div className="bg-gray-700/30 rounded-xl p-4 border border-gray-700/50">
+                  <CascadingAddressSelector
+                    label="Dropoff Address"
                     value={formData.dropoffAddress}
-                    onChange={handleInputChange}
+                    onChange={(address) => setFormData(prev => ({ ...prev, dropoffAddress: address }))}
+                    onLocationResolved={(loc) => setFormData(prev => ({ ...prev, dropoffLocation: loc }))}
                     required
-                    placeholder="Start typing address..."
-                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-700 text-white ${
-                      formData.dropoffLocation ? 'border-green-500' : 'border-gray-600'
-                    }`}
                   />
                 </div>
               </div>
@@ -1181,11 +1177,8 @@ const BusinessOwnerOrders = () => {
                   ref={mapRef}
                   className="w-full h-80 rounded-md border border-gray-600"
                 />
-                {formData.pickupLocation && (
-                  <p className="mt-2 text-xs text-green-400">✓ Pickup location set</p>
-                )}
-                {formData.dropoffLocation && (
-                  <p className="text-xs text-red-400">✓ Dropoff location set</p>
+                {formData.pickupLocation && formData.dropoffLocation && (
+                  <p className="mt-2 text-xs text-green-400">Both locations set — route shown above</p>
                 )}
               </div>
             </div>
