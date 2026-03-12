@@ -148,6 +148,20 @@ npm run dev
 
 The app will be available at **http://localhost:5173**.
 
+### 7. Create an Admin Account
+
+Run the built-in script from the `server/` folder:
+
+```bash
+cd server
+node scripts/createAdminUser.js
+```
+
+This creates an admin account with:
+- **Email:** `admin@routico.com`
+- **Password:** `Admin123!`
+- **Role:** `administrator`
+
 ## Project Structure
 
 ```
