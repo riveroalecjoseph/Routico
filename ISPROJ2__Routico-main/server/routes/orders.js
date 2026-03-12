@@ -441,6 +441,8 @@ router.delete('/:orderId', requirePerm('delete_orders'), async (req, res) => {
     const [orderRows] = await db.query('SELECT * FROM orders WHERE order_id = ? AND business_owner_id = ?', [orderId, ownerId]);
     if (!orderRows.length) return res.status(404).json({ error: 'Order not found or unauthorized' });
 
+    // Delete related status logs first (foreign key constraint)
+    await db.query('DELETE FROM deliverystatuslogs WHERE order_id = ?', [orderId]);
     await db.query('DELETE FROM orders WHERE order_id = ? AND business_owner_id = ?', [orderId, ownerId]);
     res.json({ message: 'Order deleted', order_id: orderId });
   } catch (error) {
