@@ -21,6 +21,17 @@ const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors());
+
+// Stripe webhook needs raw body BEFORE express.json() parses it
+const stripeWebhookRoute = require('./routes/stripe');
+app.use('/api/stripe', (req, res, next) => {
+  if (req.originalUrl === '/api/stripe/webhook') {
+    next();
+  } else {
+    express.json()(req, res, next);
+  }
+}, stripeWebhookRoute);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

@@ -14,6 +14,44 @@ const BusinessOwnerBilling = () => {
   const [paymentAmount, setPaymentAmount] = useState('');
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState(null);
+  const [stripeLoading, setStripeLoading] = useState(false);
+  const [periodOrders, setPeriodOrders] = useState([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+
+  // Check for Stripe payment result from URL params and verify with backend
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paymentResult = params.get('payment');
+    const sessionId = params.get('session_id');
+
+    if (paymentResult === 'success' && sessionId) {
+      const token = getToken();
+      if (!token) {
+        // Token not ready yet, will retry when user changes
+        return;
+      }
+      fetch('http://localhost:3001/api/stripe/verify-session', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ sessionId }),
+      })
+        .then(res => res.json())
+        .then(() => {
+          setSuccessMessage('Payment successful! Your billing statement has been updated.');
+          fetchStatements();
+        })
+        .catch(() => {
+          setSuccessMessage('Payment received! It may take a moment to update.');
+        });
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (paymentResult === 'cancelled') {
+      setError('Payment was cancelled. You can try again or upload proof of payment.');
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (user) {
@@ -31,11 +69,13 @@ const BusinessOwnerBilling = () => {
         setSelectedPeriod(currentMonth);
         setSelectedStatement(currentStatement);
         setPaymentAmount(currentStatement.total_due.toString());
+        fetchPeriodOrders(currentMonth);
       } else {
         // Default to most recent statement
         setSelectedPeriod(statements[0].statement_period);
         setSelectedStatement(statements[0]);
         setPaymentAmount(statements[0].total_due.toString());
+        fetchPeriodOrders(statements[0].statement_period);
       }
     }
   }, [statements]);
@@ -63,6 +103,27 @@ const BusinessOwnerBilling = () => {
     }
   };
 
+  const fetchPeriodOrders = async (period) => {
+    setOrdersLoading(true);
+    try {
+      const token = getToken();
+      const response = await fetch(`http://localhost:3001/api/auth/billing-statements/orders/${period}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setPeriodOrders(data);
+      } else {
+        setPeriodOrders([]);
+      }
+    } catch (err) {
+      console.error('Error fetching period orders:', err);
+      setPeriodOrders([]);
+    } finally {
+      setOrdersLoading(false);
+    }
+  };
+
   const handlePeriodChange = (period) => {
     const statement = statements.find(s => s.statement_period === period);
     setSelectedPeriod(period);
@@ -70,6 +131,7 @@ const BusinessOwnerBilling = () => {
     setPaymentAmount(statement?.total_due.toString() || '');
     setSelectedFile(null);
     setSuccessMessage(null);
+    fetchPeriodOrders(period);
   };
 
   const handleFileSelect = (e) => {
@@ -132,6 +194,36 @@ const BusinessOwnerBilling = () => {
       setError('Error uploading payment proof. Please try again.');
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleStripePayment = async () => {
+    if (!selectedStatement) return;
+    setStripeLoading(true);
+    setError(null);
+    try {
+      const token = getToken();
+      const response = await fetch('http://localhost:3001/api/stripe/create-checkout-session', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ statementId: selectedStatement.statement_id }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        window.location.href = data.sessionUrl;
+      } else {
+        const errorData = await response.json();
+        setError(errorData.error || 'Failed to initiate payment');
+      }
+    } catch (err) {
+      console.error('Stripe payment error:', err);
+      setError('Error initiating payment. Please try again.');
+    } finally {
+      setStripeLoading(false);
     }
   };
 
@@ -378,7 +470,7 @@ const BusinessOwnerBilling = () => {
               </div>
               <div className="ml-5 w-0 flex-1">
                 <dl>
-                  <dt className="text-sm font-medium text-gray-300 truncate">Commission</dt>
+                  <dt className="text-sm font-medium text-gray-300 truncate">Routico Commission</dt>
                   <dd className="flex items-baseline">
                     <div className="text-2xl font-semibold text-white">₱{commission.toFixed(2)}</div>
                   </dd>
@@ -448,29 +540,90 @@ const BusinessOwnerBilling = () => {
               </div>
             </div>
 
-            {/* Billing Breakdown */}
+            {/* Billing Breakdown - Order Details */}
             <div className="bg-gray-700 rounded-lg p-4 mb-6">
-              <h4 className="text-lg font-medium text-white mb-4">Billing Breakdown</h4>
-              <div className="space-y-3">
-                <div className="flex justify-between">
-                  <span className="text-gray-300">Subscription Base Fee</span>
-                  <span className="text-white font-medium">₱{baseFee.toFixed(2)}</span>
+              <h4 className="text-lg font-medium text-white mb-4">Order Breakdown</h4>
+
+              {ordersLoading ? (
+                <div className="animate-pulse space-y-2">
+                  <div className="h-4 bg-gray-600 rounded w-full"></div>
+                  <div className="h-4 bg-gray-600 rounded w-full"></div>
+                  <div className="h-4 bg-gray-600 rounded w-3/4"></div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-300">Routico Commission ({totalOrders} deliveries × ₱10.00)</span>
-                  <span className="text-white font-medium">₱{commission.toFixed(2)}</span>
-                </div>
-                <div className="border-t border-gray-600 pt-3 mt-3 flex justify-between">
-                  <span className="text-white font-semibold text-lg">Total Due to Routico</span>
-                  <span className="text-white font-semibold text-lg">₱{totalDue.toFixed(2)}</span>
-                </div>
-                <div className="border-t border-gray-600 pt-3 mt-3">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-400">Your Revenue (Delivery Fees Earned)</span>
-                    <span className="text-green-400 font-medium">₱{totalDeliveryFees.toFixed(2)}</span>
+              ) : periodOrders.length > 0 ? (
+                <>
+                  <div className="overflow-x-auto mb-4">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-600">
+                          <th className="text-left py-2 px-2 text-gray-400 font-medium">Order #</th>
+                          <th className="text-left py-2 px-2 text-gray-400 font-medium">Customer</th>
+                          <th className="text-left py-2 px-2 text-gray-400 font-medium">Date</th>
+                          <th className="text-left py-2 px-2 text-gray-400 font-medium">Status</th>
+                          <th className="text-right py-2 px-2 text-gray-400 font-medium">Delivery Fee</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {periodOrders.map((order) => (
+                          <tr key={order.order_id} className="border-b border-gray-600/50">
+                            <td className="py-2 px-2 text-gray-300">#{order.order_id}</td>
+                            <td className="py-2 px-2 text-gray-300">{order.customer_name || 'N/A'}</td>
+                            <td className="py-2 px-2 text-gray-300">
+                              {new Date(order.order_created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                            </td>
+                            <td className="py-2 px-2">
+                              <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${
+                                order.order_status === 'delivered' ? 'bg-green-100 text-green-800' :
+                                order.order_status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                                'bg-yellow-100 text-yellow-800'
+                              }`}>
+                                {order.order_status}
+                              </span>
+                            </td>
+                            <td className="py-2 px-2 text-right text-white font-medium">
+                              ₱{parseFloat(order.delivery_fee || 0).toFixed(2)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Summary */}
+                  <div className="space-y-3 border-t border-gray-600 pt-3">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-300">Total Delivery Fees ({totalOrders} orders)</span>
+                      <span className="text-green-400 font-medium">₱{totalDeliveryFees.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-300">Subscription Base Fee</span>
+                      <span className="text-white font-medium">₱{baseFee.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-300">Routico Commission ({totalOrders} deliveries × ₱10.00)</span>
+                      <span className="text-white font-medium">₱{commission.toFixed(2)}</span>
+                    </div>
+                    <div className="border-t border-gray-600 pt-3 flex justify-between">
+                      <span className="text-white font-semibold text-lg">Total Due to Routico</span>
+                      <span className="text-white font-semibold text-lg">₱{totalDue.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="text-center py-4">
+                  <p className="text-gray-400">No orders for this billing period.</p>
+                  <div className="space-y-3 mt-4 border-t border-gray-600 pt-3">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-300">Subscription Base Fee</span>
+                      <span className="text-white font-medium">₱{baseFee.toFixed(2)}</span>
+                    </div>
+                    <div className="border-t border-gray-600 pt-3 flex justify-between">
+                      <span className="text-white font-semibold text-lg">Total Due to Routico</span>
+                      <span className="text-white font-semibold text-lg">₱{totalDue.toFixed(2)}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Download Buttons */}
@@ -515,58 +668,105 @@ const BusinessOwnerBilling = () => {
         </div>
       )}
 
-      {/* Payment Proof Upload Section */}
+      {/* Payment Section */}
       {selectedStatement && (selectedStatement.status === 'pending' || selectedStatement.status === 'overdue') && (
-        <div className="bg-gray-800 shadow rounded-lg border border-gray-700">
-          <div className="px-6 py-5 border-b border-gray-700">
-            <h3 className="text-lg font-medium text-white">Upload Proof of Payment</h3>
-            <p className="mt-1 text-sm text-gray-400">
-              Upload your payment receipt for {formatMonthYear(selectedStatement.statement_period)}
-            </p>
+        <div className="space-y-6">
+          {/* Pay with Stripe */}
+          <div className="bg-gray-800 shadow rounded-lg border border-gray-700">
+            <div className="px-6 py-5 border-b border-gray-700">
+              <h3 className="text-lg font-medium text-white">Pay Online</h3>
+              <p className="mt-1 text-sm text-gray-400">
+                Pay instantly with credit/debit card — no admin approval needed
+              </p>
+            </div>
+            <div className="px-6 py-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-2xl font-bold text-white">₱{totalDue.toFixed(2)}</p>
+                  <p className="text-sm text-gray-400">{formatMonthYear(selectedStatement.statement_period)} billing</p>
+                </div>
+                <button
+                  onClick={handleStripePayment}
+                  disabled={stripeLoading}
+                  className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {stripeLoading ? (
+                    <>
+                      <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Redirecting...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                      </svg>
+                      Pay with Stripe
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div className="px-6 py-5">
-            <form onSubmit={handleUploadPayment} className="space-y-6">
-              {/* Amount Input */}
-              <div>
-                <label htmlFor="amount" className="block text-sm font-medium text-gray-300 mb-2">
-                  Payment Amount (₱)
-                </label>
-                <input
-                  type="number"
-                  id="amount"
-                  step="0.01"
-                  value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(e.target.value)}
-                  className="w-full md:w-1/2 px-3 py-2 border border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 bg-gray-700 text-white"
-                  placeholder="Enter payment amount"
-                  required
-                />
-                <p className="mt-1 text-sm text-gray-400">
-                  Total due for this period: ₱{totalDue.toFixed(2)}
-                </p>
-              </div>
+          {/* OR Divider */}
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-700"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-4 bg-gray-900 text-gray-400">OR</span>
+            </div>
+          </div>
 
-              {/* File Upload */}
-              <div>
-                <label htmlFor="payment-proof" className="block text-sm font-medium text-gray-300 mb-2">
-                  Payment Proof (Receipt/Screenshot)
-                </label>
-                <div className="border-2 border-dashed border-gray-600 rounded-lg p-6">
-                  {!selectedFile ? (
-                    <div className="text-center">
-                      <svg className="mx-auto h-12 w-12 text-gray-400 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                      </svg>
-                      <div className="space-y-2">
-                        <label htmlFor="payment-proof" className="cursor-pointer">
-                          <span className="block text-sm font-medium text-white">
-                            Click to upload payment proof
-                          </span>
-                          <span className="block text-sm text-gray-400">
-                            PDF, PNG, JPG up to 5MB
-                          </span>
+          {/* Upload Proof of Payment */}
+          <div className="bg-gray-800 shadow rounded-lg border border-gray-700">
+            <div className="px-6 py-5 border-b border-gray-700">
+              <h3 className="text-lg font-medium text-white">Upload Proof of Payment</h3>
+              <p className="mt-1 text-sm text-gray-400">
+                Upload your payment receipt for {formatMonthYear(selectedStatement.statement_period)} — admin will review within 24-48 hours
+              </p>
+            </div>
+
+            <div className="px-6 py-5">
+              <form onSubmit={handleUploadPayment} className="space-y-6">
+                {/* Amount Input */}
+                <div>
+                  <label htmlFor="amount" className="block text-sm font-medium text-gray-300 mb-2">
+                    Payment Amount (₱)
+                  </label>
+                  <input
+                    type="number"
+                    id="amount"
+                    step="0.01"
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    className="w-full md:w-1/2 px-3 py-2 border border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 bg-gray-700 text-white"
+                    placeholder="Enter payment amount"
+                    required
+                  />
+                  <p className="mt-1 text-sm text-gray-400">
+                    Total due for this period: ₱{totalDue.toFixed(2)}
+                  </p>
+                </div>
+
+                {/* File Upload */}
+                <div>
+                  <label htmlFor="payment-proof" className="block text-sm font-medium text-gray-300 mb-2">
+                    Payment Proof (Receipt/Screenshot)
+                  </label>
+                  <div>
+                    {!selectedFile ? (
+                      <div>
+                        <label htmlFor="payment-proof" className="inline-flex items-center px-4 py-2 border border-gray-600 text-sm font-medium rounded-md text-white bg-gray-700 hover:bg-gray-600 cursor-pointer transition-colors">
+                          <svg className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                          </svg>
+                          Choose File
                         </label>
+                        <span className="ml-3 text-sm text-gray-400">PDF, PNG, JPG up to 5MB</span>
                         <input
                           id="payment-proof"
                           type="file"
@@ -576,62 +776,62 @@ const BusinessOwnerBilling = () => {
                           className="hidden"
                         />
                       </div>
-                    </div>
-                  ) : (
-                    <div className="p-4 bg-gray-700 rounded-lg border border-gray-600">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center">
-                          <svg className="w-8 h-8 text-gray-400 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                          <div>
-                            <p className="text-sm font-medium text-white">{selectedFile.name}</p>
-                            <p className="text-xs text-gray-400">
-                              {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-                            </p>
+                    ) : (
+                      <div className="p-4 bg-gray-700 rounded-lg border border-gray-600">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center">
+                            <svg className="w-8 h-8 text-gray-400 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            <div>
+                              <p className="text-sm font-medium text-white">{selectedFile.name}</p>
+                              <p className="text-xs text-gray-400">
+                                {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                              </p>
+                            </div>
                           </div>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedFile(null)}
+                            className="text-gray-400 hover:text-white"
+                          >
+                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedFile(null)}
-                          className="text-gray-400 hover:text-white"
-                        >
-                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              {/* Submit Button */}
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  disabled={uploading || !selectedFile || !paymentAmount}
-                  className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {uploading ? (
-                    <>
-                      <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      Uploading...
-                    </>
-                  ) : (
-                    <>
-                      <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                      </svg>
-                      Submit Payment Proof
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
+                {/* Submit Button */}
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={uploading || !selectedFile || !paymentAmount}
+                    className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {uploading ? (
+                      <>
+                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Uploading...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        </svg>
+                        Submit Payment Proof
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       )}

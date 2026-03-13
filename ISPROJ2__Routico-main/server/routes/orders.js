@@ -238,6 +238,14 @@ router.put('/:orderId/status', requirePerm('update_order_status'), async (req, r
       [orderId, status]
     );
 
+    // If completed, increment the assigned driver's rides_completed count
+    if (status === 'completed' && orders[0].assigned_driver_id) {
+      await db.query(
+        `UPDATE drivers SET rides_completed = rides_completed + 1 WHERE driver_id = ?`,
+        [orders[0].assigned_driver_id]
+      );
+    }
+
     // Fetch updated order with joins
     const [updatedOrders] = await db.query(
       `SELECT o.*, c.company_name as customer_name, c.contact_number as customer_phone,

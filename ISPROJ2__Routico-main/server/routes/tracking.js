@@ -74,6 +74,14 @@ router.post('/:orderId/update-status', requirePerm('update_tracking'), async (re
       [orderId, status]
     );
 
+    // If completed, increment the assigned driver's rides_completed count
+    if (status === 'completed' && orderCheck[0].assigned_driver_id) {
+      await db.query(
+        'UPDATE drivers SET rides_completed = rides_completed + 1 WHERE driver_id = ?',
+        [orderCheck[0].assigned_driver_id]
+      );
+    }
+
     // If location provided, update tracking table
     if (location) {
       const driverId = orderCheck[0].assigned_driver_id;

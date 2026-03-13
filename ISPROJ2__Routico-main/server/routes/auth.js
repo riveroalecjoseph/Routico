@@ -1340,6 +1340,49 @@ router.get('/billing-statements', requirePerm('view_billing'), async (req, res) 
   }
 });
 
+// Get orders for a specific billing period
+router.get('/billing-statements/orders/:period', requirePerm('view_billing'), async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const { period } = req.params; // YYYY-MM format
+
+    const [ownerResult] = await db.query(
+      'SELECT bo.owner_id FROM businessowners bo WHERE bo.user_id = ?',
+      [req.user.user_id]
+    );
+
+    if (ownerResult.length === 0) {
+      return res.status(404).json({ error: 'Business owner not found' });
+    }
+
+    const ownerId = ownerResult[0].owner_id;
+
+    const [orders] = await db.query(
+      `SELECT
+        o.order_id,
+        o.pickup_location,
+        o.drop_off_location,
+        o.delivery_fee,
+        o.order_status,
+        o.order_created_at,
+        c.company_name as customer_name,
+        CONCAT(d.first_name, ' ', d.last_name) as driver_name
+      FROM orders o
+      LEFT JOIN customers c ON o.customer_id = c.customer_id
+      LEFT JOIN drivers d ON o.assigned_driver_id = d.driver_id
+      WHERE o.business_owner_id = ?
+      AND DATE_FORMAT(o.order_created_at, '%Y-%m') = ?
+      ORDER BY o.order_created_at DESC`,
+      [ownerId, period]
+    );
+
+    res.json(orders);
+  } catch (error) {
+    console.error('Get billing period orders error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Get specific billing statement
 router.get('/billing-statements/:statementId', requirePerm('view_billing'), async (req, res) => {
   try {

@@ -120,6 +120,11 @@ const BusinessOwnerDashboard = () => {
           // Update total orders stat from real data
           statsData.totalOrders = ordersData.length;
           statsData.completedDeliveries = ordersData.filter(o => o.order_status === 'completed').length;
+          // Calculate monthly revenue from delivery fees of current month's orders
+          const currentMonth = new Date().toISOString().slice(0, 7);
+          statsData.monthlyRevenue = ordersData
+            .filter(o => o.order_created_at && o.order_created_at.startsWith(currentMonth))
+            .reduce((sum, o) => sum + (parseFloat(o.delivery_fee) || 0), 0);
           setStats({ ...statsData });
           // Show the 5 most recent orders
           setRecentOrders(ordersData.slice(0, 5));
