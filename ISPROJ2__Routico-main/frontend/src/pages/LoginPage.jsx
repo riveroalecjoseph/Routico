@@ -32,7 +32,14 @@ const LoginPage = () => {
       // This will be handled by the AuthContext and routing logic
       navigate('/dashboard');
     } catch (error) {
-      setError('Failed to sign in. Please check your credentials.');
+      const msg = error.message || '';
+      if (msg.includes('not approved')) {
+        setError('Your account is pending admin approval. Please wait for an administrator to approve your account.');
+      } else if (msg.includes('inactive')) {
+        setError('Your account is currently inactive. Please contact an administrator.');
+      } else {
+        setError('Failed to sign in. Please check your credentials.');
+      }
     }
 
     setLoading(false);
