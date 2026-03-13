@@ -266,7 +266,7 @@ const BusinessOwnerCharts = ({ stats, loading: parentLoading, error: parentError
               </svg>
               AI Predictive Analytics
             </h3>
-            <p className="text-sm text-gray-400">Powered by Claude AI</p>
+            <p className="text-sm text-gray-400">Powered by Groq AI</p>
           </div>
           <button
             onClick={fetchAiInsights}

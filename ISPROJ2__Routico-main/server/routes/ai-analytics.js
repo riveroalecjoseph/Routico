@@ -73,14 +73,14 @@ router.post('/predict', requirePerm('use_ai_analytics'), async (req, res) => {
       customer: o.customer_name
     }));
 
-    // Call Claude API
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+    // Call Groq API
+    const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ error: 'AI analytics not configured. Set ANTHROPIC_API_KEY in server/.env' });
+      return res.status(500).json({ error: 'AI analytics not configured. Set GROQ_API_KEY in server/.env' });
     }
 
-    const Anthropic = require('@anthropic-ai/sdk');
-    const client = new Anthropic({ apiKey });
+    const Groq = require('groq-sdk');
+    const groq = new Groq({ apiKey });
 
     const prompt = `You are a logistics and delivery business analyst. Analyze the following business data and provide actionable insights.
 
@@ -116,13 +116,13 @@ Provide your response as valid JSON with these exact keys:
 
 IMPORTANT: Return ONLY the JSON object, no markdown formatting.`;
 
-    const message = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+    const chatCompletion = await groq.chat.completions.create({
+      messages: [{ role: 'user', content: prompt }],
+      model: 'llama-3.3-70b-versatile',
       max_tokens: 1500,
-      messages: [{ role: 'user', content: prompt }]
     });
 
-    const aiResponse = message.content[0].text;
+    const aiResponse = chatCompletion.choices[0].message.content;
 
     let insights;
     try {
