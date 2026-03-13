@@ -46,17 +46,24 @@ class RegistrationService {
       const saltRounds = 10;
       const passwordHash = await bcrypt.hash(password, saltRounds);
       
-      // Step 5: Insert user into database
+      // Step 5: Get the business_owner role_id
+      const [roleRows] = await this.db.query(
+        "SELECT role_id FROM roles WHERE role_name = 'business_owner'"
+      );
+      const roleId = roleRows.length > 0 ? roleRows[0].role_id : null;
+
+      // Step 6: Insert user into database
       const result = await this.db.query(
         `INSERT INTO users (
-          full_name, email, password_hash, phone, account_status, 
-          active_status, role, created_at
-        ) VALUES (?, ?, ?, ?, 'pending', 'inactive', 'business_owner', NOW())`,
+          full_name, email, password_hash, phone, account_status,
+          active_status, role, role_id, created_at
+        ) VALUES (?, ?, ?, ?, 'pending', 'inactive', 'business_owner', ?, NOW())`,
         [
           fullName,
           email,
           passwordHash,
-          phone
+          phone,
+          roleId
         ]
       );
       
