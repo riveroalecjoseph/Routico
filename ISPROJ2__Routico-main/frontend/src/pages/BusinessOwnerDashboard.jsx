@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import BusinessOwnerBilling from '../components/BusinessOwnerBilling';
 import BusinessOwnerCharts from '../components/BusinessOwnerCharts';
@@ -16,8 +16,10 @@ const BusinessOwnerDashboard = () => {
   const [logo, setLogo] = useState(null);
   const [companyName, setCompanyName] = useState('Routico');
   const [searchQuery, setSearchQuery] = useState('');
-  const [showNotifications, setShowNotifications] = useState(false);
-  const notificationRef = useRef(null);
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = localStorage.getItem('theme');
+    return saved ? saved === 'dark' : true; // default dark
+  });
   const [stats, setStats] = useState({
     totalOrders: 0,
     activeDrivers: 0,
@@ -25,23 +27,23 @@ const BusinessOwnerDashboard = () => {
     activeDeliveries: 0,
     delayedDeliveries: 0,
     monthlyRevenue: 0,
-    subscriptionStatus: 'pending'
+    subscriptionStatus: 'pending',
+    weeklyVolume: [0, 0, 0, 0, 0, 0, 0]
   });
 
   const [recentOrders, setRecentOrders] = useState([]);
   const [drivers, setDrivers] = useState([]);
   const [error, setError] = useState(null);
 
-  // Close notification dropdown on outside click
+  // Apply dark/light mode to document
   useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (notificationRef.current && !notificationRef.current.contains(e.target)) {
-        setShowNotifications(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('theme', darkMode ? 'dark' : 'light');
+  }, [darkMode]);
 
   useEffect(() => {
     const savedLogo = localStorage.getItem('companyLogo');
@@ -113,7 +115,7 @@ const BusinessOwnerDashboard = () => {
 
       if (user) {
         const token = getToken();
-        const ordersResponse = await fetch('http://localhost:3001/api/orders', {
+        const ordersResponse = await fetch('http://localhost:3001/api/orders?includeRouted=true', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
 
@@ -123,10 +125,30 @@ const BusinessOwnerDashboard = () => {
           statsData.completedDeliveries = ordersData.filter(o => o.order_status === 'completed').length;
           statsData.activeDeliveries = ordersData.filter(o => o.order_status === 'in_transit').length;
           statsData.delayedDeliveries = ordersData.filter(o => o.order_status === 'delayed' || o.order_status === 'failed').length;
+          statsData.cancelledOrders = ordersData.filter(o => o.order_status === 'cancelled').length;
           const currentMonth = new Date().toISOString().slice(0, 7);
           statsData.monthlyRevenue = ordersData
             .filter(o => o.order_created_at && o.order_created_at.startsWith(currentMonth))
             .reduce((sum, o) => sum + (parseFloat(o.delivery_fee) || 0), 0);
+
+          // Compute weekly volume (Mon=0, Sun=6) for the current week
+          const now = new Date();
+          const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon, ...
+          const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+          const monday = new Date(now);
+          monday.setHours(0, 0, 0, 0);
+          monday.setDate(now.getDate() + mondayOffset);
+          const weeklyCount = [0, 0, 0, 0, 0, 0, 0];
+          ordersData.forEach(o => {
+            if (!o.order_created_at) return;
+            const orderDate = new Date(o.order_created_at);
+            const diffDays = Math.floor((orderDate - monday) / (1000 * 60 * 60 * 24));
+            if (diffDays >= 0 && diffDays < 7) {
+              weeklyCount[diffDays]++;
+            }
+          });
+          statsData.weeklyVolume = weeklyCount;
+
           setStats({ ...statsData });
           setRecentOrders(ordersData.slice(0, 5));
         } else {
@@ -143,7 +165,8 @@ const BusinessOwnerDashboard = () => {
         activeDeliveries: 0,
         delayedDeliveries: 0,
         monthlyRevenue: 0,
-        subscriptionStatus: 'pending'
+        subscriptionStatus: 'pending',
+        weeklyVolume: [0, 0, 0, 0, 0, 0, 0]
       });
       setRecentOrders([]);
     } finally {
@@ -248,6 +271,7 @@ const BusinessOwnerDashboard = () => {
   };
 
   const delayedOrders = stats.delayedDeliveries || 0;
+  const cancelledOrders = stats.cancelledOrders || 0;
   const inTransitOrders = stats.activeDeliveries || 0;
 
   return (
@@ -388,53 +412,22 @@ const BusinessOwnerDashboard = () => {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {/* Notification Bell */}
-            <div className="relative" ref={notificationRef}>
-              <button
-                onClick={() => setShowNotifications(!showNotifications)}
-                className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:bg-[#2463eb]/10 hover:text-[#2463eb] transition-all relative"
-              >
+            {/* Dark/Light Mode Toggle */}
+            <button
+              onClick={() => setDarkMode(!darkMode)}
+              className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:bg-[#2463eb]/10 hover:text-[#2463eb] transition-all"
+              title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {darkMode ? (
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
                 </svg>
-                {recentOrders.length > 0 && (
-                  <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-slate-900"></span>
-                )}
-              </button>
-              {showNotifications && (
-                <div className="absolute right-0 top-full mt-2 w-80 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50">
-                  <div className="p-4 border-b border-slate-700">
-                    <h3 className="text-sm font-semibold text-white">Notifications</h3>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto">
-                    {recentOrders.length > 0 ? (
-                      recentOrders.slice(0, 5).map((order) => (
-                        <button
-                          key={order.order_id}
-                          onClick={() => { setActiveTab('orders'); setShowNotifications(false); }}
-                          className="w-full text-left px-4 py-3 hover:bg-slate-700/50 transition-colors border-b border-slate-700/50 last:border-0"
-                        >
-                          <p className="text-sm text-white font-medium">{order.customer_name || 'Order'}</p>
-                          <p className="text-xs text-slate-400 mt-0.5">Status: {order.order_status}</p>
-                        </button>
-                      ))
-                    ) : (
-                      <div className="px-4 py-6 text-center text-sm text-slate-500">No new notifications</div>
-                    )}
-                  </div>
-                  {recentOrders.length > 0 && (
-                    <div className="p-3 border-t border-slate-700">
-                      <button
-                        onClick={() => { setActiveTab('orders'); setShowNotifications(false); }}
-                        className="w-full text-center text-xs font-semibold text-blue-400 hover:text-blue-300 transition-colors"
-                      >
-                        View all orders
-                      </button>
-                    </div>
-                  )}
-                </div>
+              ) : (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                </svg>
               )}
-            </div>
+            </button>
             <div className="w-px h-6 bg-slate-700 mx-1"></div>
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center border-2 border-[#2463eb]/20">
               <span className="text-sm font-semibold text-white">
@@ -565,16 +558,13 @@ const BusinessOwnerDashboard = () => {
                     <h4 className="font-bold text-lg text-white">Delivery Volume Overview</h4>
                   </div>
                   {(() => {
-                    const chartData = [
-                      { day: 'Mon', value: 5 },
-                      { day: 'Tue', value: 12 },
-                      { day: 'Wed', value: 18 },
-                      { day: 'Thu', value: 14 },
-                      { day: 'Fri', value: 22 },
-                      { day: 'Sat', value: 26 },
-                      { day: 'Sun', value: 20 },
-                    ];
-                    const maxVal = Math.max(...chartData.map(d => d.value));
+                    const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+                    const wv = stats.weeklyVolume || [0, 0, 0, 0, 0, 0, 0];
+                    const chartData = dayLabels.map((day, i) => ({
+                      day,
+                      value: wv[i] || 0
+                    }));
+                    const maxVal = Math.max(...chartData.map(d => d.value)) || 1;
                     const points = chartData.map((d, i) => ({
                       x: 8 + (i * (84 / 6)),
                       y: 85 - (d.value / maxVal) * 65,
@@ -653,7 +643,7 @@ const BusinessOwnerDashboard = () => {
                         <span className="w-3 h-3 rounded-full bg-slate-600"></span>
                         <span className="text-slate-400">Pending</span>
                       </div>
-                      <span className="font-semibold text-white">{loading ? '...' : stats.totalOrders - stats.completedDeliveries - delayedOrders}</span>
+                      <span className="font-semibold text-white">{loading ? '...' : stats.totalOrders - stats.completedDeliveries - delayedOrders - cancelledOrders}</span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">
@@ -662,6 +652,15 @@ const BusinessOwnerDashboard = () => {
                       </div>
                       <span className="font-semibold text-white">{loading ? '...' : delayedOrders}</span>
                     </div>
+                    {cancelledOrders > 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="w-3 h-3 rounded-full bg-orange-500"></span>
+                        <span className="text-slate-400">Cancelled</span>
+                      </div>
+                      <span className="font-semibold text-white">{cancelledOrders}</span>
+                    </div>
+                    )}
                   </div>
                 </div>
               </section>

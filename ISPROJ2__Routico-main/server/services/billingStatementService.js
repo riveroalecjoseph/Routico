@@ -191,14 +191,14 @@ class BillingStatementService {
           b.generated_at,
           DATE_ADD(b.billing_period, INTERVAL 1 MONTH) as due_date,
           DATE_ADD(DATE_ADD(b.billing_period, INTERVAL 1 MONTH), INTERVAL 7 DAY) as grace_period_end,
-          ROUND(b.total_commission / 10) as delivery_count,
+          (SELECT COUNT(*) FROM orders o WHERE o.business_owner_id = b.owner_id AND DATE_FORMAT(o.order_created_at, '%Y-%m') = DATE_FORMAT(b.billing_period, '%Y-%m')) as delivery_count,
           -- Get actual delivery fees from orders
-          (SELECT COALESCE(SUM(o.delivery_fee), 0) 
-           FROM orders o 
-           WHERE o.business_owner_id = b.owner_id 
+          (SELECT COALESCE(SUM(o.delivery_fee), 0)
+           FROM orders o
+           WHERE o.business_owner_id = b.owner_id
            AND DATE_FORMAT(o.order_created_at, '%Y-%m') = DATE_FORMAT(b.billing_period, '%Y-%m')) as total_delivery_fees
-         FROM billing b 
-         WHERE b.owner_id = ? 
+         FROM billing b
+         WHERE b.owner_id = ?
          AND DATE_FORMAT(b.billing_period, '%Y-%m') = ?`,
         [ownerId, statementPeriod]
       );
@@ -243,14 +243,14 @@ class BillingStatementService {
           b.payment_proof_path,
           DATE_ADD(b.billing_period, INTERVAL 1 MONTH) as due_date,
           DATE_ADD(DATE_ADD(b.billing_period, INTERVAL 1 MONTH), INTERVAL 7 DAY) as grace_period_end,
-          ROUND(b.total_commission / 10) as delivery_count,
+          (SELECT COUNT(*) FROM orders o WHERE o.business_owner_id = b.owner_id AND DATE_FORMAT(o.order_created_at, '%Y-%m') = DATE_FORMAT(b.billing_period, '%Y-%m')) as delivery_count,
           u.full_name,
           u.email,
           bo.company_name,
           -- Get actual delivery fees from orders
-          (SELECT COALESCE(SUM(o.delivery_fee), 0) 
-           FROM orders o 
-           WHERE o.business_owner_id = b.owner_id 
+          (SELECT COALESCE(SUM(o.delivery_fee), 0)
+           FROM orders o
+           WHERE o.business_owner_id = b.owner_id
            AND DATE_FORMAT(o.order_created_at, '%Y-%m') = DATE_FORMAT(b.billing_period, '%Y-%m')) as total_delivery_fees
          FROM billing b 
          JOIN businessowners bo ON b.owner_id = bo.owner_id

@@ -21,6 +21,10 @@ router.get('/', requirePerm('view_orders'), async (req, res) => {
     const ownerId = ownerResult[0].owner_id;
 
     // Get orders with customer and driver information via JOIN
+    // If includeRouted=true (for Route Optimization page), return all orders
+    // Otherwise exclude orders that belong to an optimized route
+    const includeRouted = req.query.includeRouted === 'true';
+    const routeFilter = includeRouted ? '' : 'AND (o.route_id IS NULL OR o.route_id = 0)';
     const [orders] = await db.query(
       `SELECT
         o.*,
@@ -30,7 +34,7 @@ router.get('/', requirePerm('view_orders'), async (req, res) => {
       FROM orders o
       LEFT JOIN customers c ON o.customer_id = c.customer_id
       LEFT JOIN drivers d ON o.assigned_driver_id = d.driver_id
-      WHERE o.business_owner_id = ?
+      WHERE o.business_owner_id = ? ${routeFilter}
       ORDER BY o.order_created_at DESC`,
       [ownerId]
     );
@@ -224,6 +228,13 @@ router.put('/:orderId/status', requirePerm('update_order_status'), async (req, r
     if (!allowedNext.includes(status)) {
       return res.status(400).json({
         error: `Cannot change status from '${currentStatus}' to '${status}'. Allowed transitions: ${allowedNext.length > 0 ? allowedNext.join(', ') : 'none (terminal state)'}`
+      });
+    }
+
+    // Require a driver to be assigned before moving to assigned/in_transit
+    if (['assigned', 'in_transit'].includes(status) && !orders[0].assigned_driver_id) {
+      return res.status(400).json({
+        error: 'Cannot change status to \'' + status + '\' without an assigned driver. Please assign a driver first.'
       });
     }
 
@@ -450,9 +461,23 @@ router.delete('/:orderId', requirePerm('delete_orders'), async (req, res) => {
     const [orderRows] = await db.query('SELECT * FROM orders WHERE order_id = ? AND business_owner_id = ?', [orderId, ownerId]);
     if (!orderRows.length) return res.status(404).json({ error: 'Order not found or unauthorized' });
 
-    // Delete related status logs first (foreign key constraint)
+    // Get the order's month for billing recalculation
+    const orderMonth = new Date(orderRows[0].order_created_at).toISOString().slice(0, 7); // YYYY-MM
+
+    // Delete related records first (foreign key constraints)
     await db.query('DELETE FROM deliverystatuslogs WHERE order_id = ?', [orderId]);
+    await db.query('DELETE FROM routeorders WHERE order_id = ?', [orderId]);
     await db.query('DELETE FROM orders WHERE order_id = ? AND business_owner_id = ?', [orderId, ownerId]);
+
+    // Recalculate billing for the affected month so cached totals stay in sync
+    await db.query(
+      `UPDATE billing b SET
+        b.total_commission = (SELECT COUNT(*) * 10.00 FROM orders o WHERE o.business_owner_id = b.owner_id AND DATE_FORMAT(o.order_created_at, '%Y-%m') = DATE_FORMAT(b.billing_period, '%Y-%m')),
+        b.total_due = b.flat_fee + (SELECT COUNT(*) * 10.00 FROM orders o WHERE o.business_owner_id = b.owner_id AND DATE_FORMAT(o.order_created_at, '%Y-%m') = DATE_FORMAT(b.billing_period, '%Y-%m'))
+      WHERE b.owner_id = ? AND DATE_FORMAT(b.billing_period, '%Y-%m') = ?`,
+      [ownerId, orderMonth]
+    );
+
     res.json({ message: 'Order deleted', order_id: orderId });
   } catch (error) {
     console.error('Error deleting order:', error);

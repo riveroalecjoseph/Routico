@@ -83,7 +83,7 @@ const DriverOrders = () => {
 
   // Load Google Maps script
   useEffect(() => {
-    const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
+    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || import.meta.env.VITE_FIREBASE_API_KEY;
     if (!apiKey) return;
     if (window.google?.maps) return;
     const existing = document.querySelector('script[src*="maps.googleapis.com"]');

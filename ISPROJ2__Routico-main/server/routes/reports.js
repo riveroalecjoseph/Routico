@@ -183,7 +183,7 @@ async function getDeliverySummaryData(db, ownerId, startDate, endDate) {
       o.order_id, o.pickup_location, o.drop_off_location, o.delivery_fee,
       o.weight, o.size, o.order_status, o.order_created_at, o.scheduled_delivery_time,
       c.company_name AS customer_name,
-      CONCAT(u.full_name) AS driver_name
+      COALESCE(CONCAT(d.first_name, ' ', d.last_name), u.full_name) AS driver_name
     FROM orders o
     LEFT JOIN customers c ON o.customer_id = c.customer_id
     LEFT JOIN drivers d ON o.assigned_driver_id = d.driver_id
@@ -198,7 +198,9 @@ async function getDeliverySummaryData(db, ownerId, startDate, endDate) {
   const cancelledOrders = orders.filter(o => o.order_status === 'cancelled').length;
   const pendingOrders = orders.filter(o => o.order_status === 'pending').length;
   const inTransitOrders = orders.filter(o => o.order_status === 'in_transit').length;
-  const totalRevenue = orders.reduce((sum, o) => sum + parseFloat(o.delivery_fee || 0), 0);
+  const totalRevenue = orders
+    .filter(o => ['completed', 'delivered'].includes(o.order_status))
+    .reduce((sum, o) => sum + parseFloat(o.delivery_fee || 0), 0);
   const completionRate = totalOrders > 0 ? ((completedOrders / totalOrders) * 100).toFixed(1) : 0;
 
   return {

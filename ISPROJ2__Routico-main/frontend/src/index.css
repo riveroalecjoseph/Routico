@@ -9,6 +9,18 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Light mode - invert the dark theme */
+html:not(.dark) body {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* Re-invert images and videos so they look normal in light mode */
+html:not(.dark) img,
+html:not(.dark) video,
+html:not(.dark) svg {
+  filter: invert(1) hue-rotate(180deg);
+}
+
 #root {
   min-height: 100vh;
 }

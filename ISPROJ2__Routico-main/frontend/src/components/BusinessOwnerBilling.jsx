@@ -351,11 +351,16 @@ const BusinessOwnerBilling = () => {
     );
   }
 
-  const totalOrders = selectedStatement?.delivery_count || 0;
-  const totalDeliveryFees = parseFloat(selectedStatement?.total_delivery_fees || 0);
-  const commission = parseFloat(selectedStatement?.commission || 0);
+  // Exclude cancelled orders from totals
+  const nonCancelledOrders = periodOrders.filter(o => o.order_status !== 'cancelled');
+  const totalOrders = nonCancelledOrders.length || selectedStatement?.delivery_count || 0;
+  const totalDeliveryFees = nonCancelledOrders.length > 0
+    ? nonCancelledOrders.reduce((sum, o) => sum + parseFloat(o.delivery_fee || 0), 0)
+    : parseFloat(selectedStatement?.total_delivery_fees || 0);
+  const commissionPerOrder = 10;
+  const commission = totalOrders * commissionPerOrder;
   const baseFee = parseFloat(selectedStatement?.base_fee || 0);
-  const totalDue = parseFloat(selectedStatement?.total_due || 0);
+  const totalDue = baseFee + commission;
   const isPaid = selectedStatement?.status === 'paid';
   const isPending = selectedStatement?.status === 'pending';
   const isOverdue = selectedStatement?.status === 'overdue';
@@ -558,6 +563,7 @@ const BusinessOwnerBilling = () => {
                         <tr className="border-b border-gray-600">
                           <th className="text-left py-2 px-2 text-gray-400 font-medium">Order #</th>
                           <th className="text-left py-2 px-2 text-gray-400 font-medium">Customer</th>
+                          <th className="text-left py-2 px-2 text-gray-400 font-medium">Driver</th>
                           <th className="text-left py-2 px-2 text-gray-400 font-medium">Date</th>
                           <th className="text-left py-2 px-2 text-gray-400 font-medium">Status</th>
                           <th className="text-right py-2 px-2 text-gray-400 font-medium">Delivery Fee</th>
@@ -565,22 +571,34 @@ const BusinessOwnerBilling = () => {
                       </thead>
                       <tbody>
                         {periodOrders.map((order) => (
-                          <tr key={order.order_id} className="border-b border-gray-600/50">
+                          <tr key={order.order_id} className={`border-b border-gray-600/50 ${order.order_status === 'cancelled' ? 'opacity-50' : ''}`}>
                             <td className="py-2 px-2 text-gray-300">#{order.order_id}</td>
                             <td className="py-2 px-2 text-gray-300">{order.customer_name || 'N/A'}</td>
+                            <td className="py-2 px-2 text-gray-300">{order.driver_name || 'Not Assigned'}</td>
                             <td className="py-2 px-2 text-gray-300">
                               {new Date(order.order_created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                             </td>
                             <td className="py-2 px-2">
                               <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${
-                                order.order_status === 'delivered' ? 'bg-green-100 text-green-800' :
-                                order.order_status === 'cancelled' ? 'bg-red-100 text-red-800' :
-                                'bg-yellow-100 text-yellow-800'
+                                order.order_status === 'completed' ? 'bg-green-900/50 text-green-400 border border-green-500/30' :
+                                order.order_status === 'delivered' ? 'bg-teal-900/50 text-teal-400 border border-teal-500/30' :
+                                order.order_status === 'in_transit' ? 'bg-blue-900/50 text-blue-400 border border-blue-500/30' :
+                                order.order_status === 'assigned' ? 'bg-purple-900/50 text-purple-400 border border-purple-500/30' :
+                                order.order_status === 'delayed' ? 'bg-orange-900/50 text-orange-400 border border-orange-500/30' :
+                                order.order_status === 'cancelled' ? 'bg-red-900/50 text-red-400 border border-red-500/30' :
+                                'bg-yellow-900/50 text-yellow-400 border border-yellow-500/30'
                               }`}>
-                                {order.order_status}
+                                {order.order_status === 'in_transit' ? 'In Transit' :
+                                 order.order_status === 'completed' ? 'Completed' :
+                                 order.order_status === 'delivered' ? 'Delivered' :
+                                 order.order_status === 'assigned' ? 'Assigned' :
+                                 order.order_status === 'delayed' ? 'Delayed' :
+                                 order.order_status === 'cancelled' ? 'Cancelled' :
+                                 order.order_status === 'pending' ? 'Pending' :
+                                 order.order_status}
                               </span>
                             </td>
-                            <td className="py-2 px-2 text-right text-white font-medium">
+                            <td className={`py-2 px-2 text-right font-medium ${order.order_status === 'cancelled' ? 'text-gray-500 line-through' : 'text-white'}`}>
                               ₱{parseFloat(order.delivery_fee || 0).toFixed(2)}
                             </td>
                           </tr>
@@ -591,6 +609,9 @@ const BusinessOwnerBilling = () => {
 
                   {/* Summary */}
                   <div className="space-y-3 border-t border-gray-600 pt-3">
+                    {periodOrders.some(o => o.order_status === 'cancelled') && (
+                      <p className="text-xs text-gray-500 italic">Cancelled orders are excluded from totals.</p>
+                    )}
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-300">Total Delivery Fees ({totalOrders} orders)</span>
                       <span className="text-green-400 font-medium">₱{totalDeliveryFees.toFixed(2)}</span>

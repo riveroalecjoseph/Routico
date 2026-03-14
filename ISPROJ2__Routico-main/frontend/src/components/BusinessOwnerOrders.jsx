@@ -305,7 +305,7 @@ const BusinessOwnerOrders = ({ routeOptimizationOnly = false }) => {
       try {
         if (!user) return;
         const token = getToken();
-        const response = await fetch('http://localhost:3001/api/orders', {
+        const response = await fetch(`http://localhost:3001/api/orders${routeOptimizationOnly ? '?includeRouted=true' : ''}`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
@@ -1373,17 +1373,6 @@ const BusinessOwnerOrders = ({ routeOptimizationOnly = false }) => {
         ) : (
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold text-white">Recent Orders</h3>
-            <button
-              onClick={() => { setShowOptimize(!showOptimize); setOptimizationResult(null); setSelectedForOptimize([]); }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
-                showOptimize ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-              }`}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-              </svg>
-              {showOptimize ? 'Cancel Optimization' : 'Optimize Routes'}
-            </button>
           </div>
         )}
 
@@ -1391,7 +1380,7 @@ const BusinessOwnerOrders = ({ routeOptimizationOnly = false }) => {
           <div className="bg-gray-800 border border-purple-500/50 rounded-lg p-4 mb-4">
             <p className="text-sm text-gray-300 mb-3">Select orders to include in route optimization (minimum 2):</p>
             <div className="space-y-2 max-h-48 overflow-y-auto mb-4">
-              {orders.filter(o => o.order_status === 'pending' || o.order_status === 'assigned').map(order => (
+              {orders.filter(o => (o.order_status === 'pending' || o.order_status === 'assigned') && !o.route_id).map(order => (
                 <label key={order.order_id} className="flex items-center gap-3 p-2 rounded hover:bg-gray-700 cursor-pointer">
                   <input
                     type="checkbox"
@@ -1791,7 +1780,12 @@ const BusinessOwnerOrders = ({ routeOptimizationOnly = false }) => {
                             removeOrderFromState(selectedOrder.order_id);
                             toast.success('Order deleted successfully!');
                             setSelectedOrder(null);
+                          } else {
+                            const errData = await res.json().catch(() => ({}));
+                            toast.error(errData.error || 'Failed to delete order');
                           }
+                        } catch (err) {
+                          toast.error('Network error: ' + err.message);
                         } finally { setDeleteLoading(false); setDeleting(false); }}}
                       >Yes, Delete</button>
                       <button className="px-4 py-1 bg-gray-700 text-gray-200 rounded hover:bg-gray-600" onClick={() => setDeleting(false)} disabled={deleteLoading}>Cancel</button>
