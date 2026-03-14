@@ -4,7 +4,7 @@ import { useToast } from './Toast';
 import { format, isToday, isAfter, parseISO } from 'date-fns';
 import CascadingAddressSelector from './CascadingAddressSelector';
 
-const BusinessOwnerOrders = () => {
+const BusinessOwnerOrders = ({ routeOptimizationOnly = false }) => {
   const { user, getToken } = useAuth();
   const { toast } = useToast();
   const [orders, setOrders] = useState([]);
@@ -48,7 +48,7 @@ const BusinessOwnerOrders = () => {
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [statusLog, setStatusLog] = useState([]);
   const [loadingLog, setLoadingLog] = useState(false);
-  const [showOptimize, setShowOptimize] = useState(false);
+  const [showOptimize, setShowOptimize] = useState(routeOptimizationOnly);
   const [selectedForOptimize, setSelectedForOptimize] = useState([]);
   const [optimizing, setOptimizing] = useState(false);
   const [optimizationResult, setOptimizationResult] = useState(null);
@@ -114,6 +114,8 @@ const BusinessOwnerOrders = () => {
         updateOrderInState(updated);
         setSelectedOrder(updated);
         toast.success(`Status updated to ${newStatus}`);
+        // Notify dashboard to refresh stats
+        window.dispatchEvent(new Event('ordersUpdated'));
       } else {
         const err = await res.json();
         toast.error(err.error || 'Failed to update status');
@@ -687,6 +689,7 @@ const BusinessOwnerOrders = () => {
       in_transit: 'bg-purple-900 text-purple-200',
       'in-transit': 'bg-purple-900 text-purple-200',
       picked_up: 'bg-purple-900 text-purple-200',
+      delayed: 'bg-orange-900 text-orange-200',
       delivered: 'bg-teal-900 text-teal-200',
       completed: 'bg-green-900 text-green-200',
       cancelled: 'bg-red-900 text-red-200'
@@ -973,8 +976,8 @@ const BusinessOwnerOrders = () => {
     const routeIds = Object.keys(routeGroups);
     return (
       <div className="space-y-8">
-        {/* Optimized Routes */}
-        {routeIds.length > 0 && (
+        {/* Optimized Routes - hidden from delivery orders, shown via dedicated block in route optimization */}
+        {false && routeIds.length > 0 && (
           <div>
             <h4 className="text-xl font-semibold text-purple-400 mb-4">Optimized Routes</h4>
             {routeIds.map(routeId => {
@@ -1098,24 +1101,26 @@ const BusinessOwnerOrders = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h2 className="text-2xl font-bold text-white">Orders Management</h2>
-          <p className="mt-1 text-gray-300">Create and manage delivery orders</p>
+      {!routeOptimizationOnly && (
+        <div className="flex justify-between items-center">
+          <div>
+            <h2 className="text-2xl font-bold text-white">Orders Management</h2>
+            <p className="mt-1 text-gray-300">Create and manage delivery orders</p>
+          </div>
+          <button
+            onClick={() => setShowCreateForm(!showCreateForm)}
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+          >
+            <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            </svg>
+            {showCreateForm ? 'Cancel' : 'Create New Order'}
+          </button>
         </div>
-        <button
-          onClick={() => setShowCreateForm(!showCreateForm)}
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors"
-        >
-          <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-          </svg>
-          {showCreateForm ? 'Cancel' : 'Create New Order'}
-        </button>
-      </div>
+      )}
 
       {/* Create Order Form */}
-      {showCreateForm && (
+      {!routeOptimizationOnly && showCreateForm && (
         <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
           <h3 className="text-xl font-bold text-white mb-6">Create New Order</h3>
           
@@ -1351,20 +1356,36 @@ const BusinessOwnerOrders = () => {
 
       {/* Route Optimization */}
       <div className="mb-6">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold text-white">Recent Orders</h3>
-          <button
-            onClick={() => { setShowOptimize(!showOptimize); setOptimizationResult(null); setSelectedForOptimize([]); }}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
-              showOptimize ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-            }`}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-            </svg>
-            {showOptimize ? 'Cancel Optimization' : 'Optimize Routes'}
-          </button>
-        </div>
+        {routeOptimizationOnly ? (
+          <div className="flex justify-center mb-6">
+            <button
+              onClick={() => { setShowOptimize(!showOptimize); setOptimizationResult(null); setSelectedForOptimize([]); }}
+              className={`px-6 py-3 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 ${
+                showOptimize ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-purple-600 hover:bg-purple-700 text-white'
+              }`}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+              </svg>
+              {showOptimize ? 'Cancel Optimization' : 'Optimize Routes'}
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold text-white">Recent Orders</h3>
+            <button
+              onClick={() => { setShowOptimize(!showOptimize); setOptimizationResult(null); setSelectedForOptimize([]); }}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                showOptimize ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+              </svg>
+              {showOptimize ? 'Cancel Optimization' : 'Optimize Routes'}
+            </button>
+          </div>
+        )}
 
         {showOptimize && (
           <div className="bg-gray-800 border border-purple-500/50 rounded-lg p-4 mb-4">
@@ -1495,9 +1516,64 @@ const BusinessOwnerOrders = () => {
         )}
       </div>
 
-      {/* Orders List */}
-      <div>
-        {selectedOrder ? (
+      {/* Show only optimized routes in route optimization mode */}
+      {routeOptimizationOnly && (() => {
+        const routeGroups = {};
+        orders.forEach(order => {
+          if (order.route_id && order.route_sequence) {
+            if (!routeGroups[order.route_id]) routeGroups[order.route_id] = [];
+            routeGroups[order.route_id].push(order);
+          }
+        });
+        Object.values(routeGroups).forEach(g => g.sort((a, b) => a.route_sequence - b.route_sequence));
+        const routeIds = Object.keys(routeGroups);
+        if (routeIds.length === 0) return (
+          <div className="text-center py-10">
+            <svg className="mx-auto h-10 w-10 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+            </svg>
+            <h3 className="mt-3 text-sm font-medium text-gray-300">No optimized routes yet</h3>
+            <p className="mt-1 text-xs text-gray-500">Select orders above and click Optimize to create routes.</p>
+          </div>
+        );
+        return (
+          <div className="space-y-4">
+            <h4 className="text-xl font-semibold text-purple-400">Optimized Routes</h4>
+            {routeIds.map(routeId => {
+              const routeOrders = routeGroups[routeId];
+              const driverName = routeOrders[0]?.driver_name;
+              const allCompleted = routeOrders.every(o => o.order_status === 'completed');
+              const completedCount = routeOrders.filter(o => o.order_status === 'completed').length;
+              return (
+                <div key={routeId} className="border border-purple-500/30 rounded-xl p-4 bg-gray-900/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                      </svg>
+                      <span className="text-purple-300 font-semibold">Route #{routeId}</span>
+                      <span className="text-gray-400 text-sm">({routeOrders.length} stops)</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {driverName && <span className="text-sm text-blue-400">Driver: {driverName}</span>}
+                      <span className={`text-xs px-2 py-1 rounded-full ${allCompleted ? 'bg-green-500/20 text-green-400' : 'bg-purple-500/20 text-purple-300'}`}>
+                        {allCompleted ? 'Route Complete' : `${completedCount}/${routeOrders.length} completed`}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3">
+                    {routeOrders.map(order => renderOrderCard(order))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
+      {/* Order Detail View - shown in both modes when an order is selected */}
+      {selectedOrder && (
+        <div>
           <div className="bg-gray-900 rounded-lg border border-blue-500 p-8 shadow-xl max-w-xl mx-auto">
             <button
               onClick={() => { setSelectedOrder(null); setEditMode(false); setEditFields({}); }}
@@ -1546,7 +1622,8 @@ const BusinessOwnerOrders = () => {
                     const validTransitions = {
                       pending: ['assigned', 'cancelled'],
                       assigned: ['in_transit', 'cancelled'],
-                      in_transit: ['delivered', 'cancelled'],
+                      in_transit: ['delivered', 'cancelled', 'delayed'],
+                      delayed: ['in_transit', 'delivered', 'cancelled'],
                       delivered: ['completed'],
                       completed: [],
                       cancelled: []
@@ -1554,11 +1631,11 @@ const BusinessOwnerOrders = () => {
                     const statusFlow = ['pending', 'assigned', 'in_transit', 'delivered', 'completed'];
                     const statusLabels = {
                       pending: 'Pending', assigned: 'Assigned', in_transit: 'In Transit',
-                      delivered: 'Delivered', completed: 'Completed', cancelled: 'Cancelled'
+                      delayed: 'Delayed', delivered: 'Delivered', completed: 'Completed', cancelled: 'Cancelled'
                     };
                     const statusColors = {
                       pending: 'bg-yellow-500', assigned: 'bg-blue-500', in_transit: 'bg-purple-500',
-                      delivered: 'bg-teal-500', completed: 'bg-green-500', cancelled: 'bg-red-500'
+                      delayed: 'bg-orange-500', delivered: 'bg-teal-500', completed: 'bg-green-500', cancelled: 'bg-red-500'
                     };
                     const currentIdx = statusFlow.indexOf(selectedOrder.order_status);
                     const isCancelled = selectedOrder.order_status === 'cancelled';
@@ -1827,17 +1904,24 @@ const BusinessOwnerOrders = () => {
               </form>
             )}
           </div>
-        ) : orders.length === 0 ? (
-          <div className="bg-gray-800 rounded-lg border border-gray-700 p-12 text-center">
-            <svg className="mx-auto h-16 w-16 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            <p className="mt-4 text-gray-400">No orders yet. Create your first order to get started!</p>
-          </div>
-        ) : (
-          renderGroupedOrders()
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* Orders List - only in delivery orders mode */}
+      {!routeOptimizationOnly && !selectedOrder && (
+        <div>
+          {orders.length === 0 ? (
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-12 text-center">
+              <svg className="mx-auto h-16 w-16 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <p className="mt-4 text-gray-400">No orders yet. Create your first order to get started!</p>
+            </div>
+          ) : (
+            renderGroupedOrders()
+          )}
+        </div>
+      )}
     </div>
   );
 };

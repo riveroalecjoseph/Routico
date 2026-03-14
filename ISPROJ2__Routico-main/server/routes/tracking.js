@@ -43,7 +43,7 @@ router.post('/:orderId/update-status', requirePerm('update_tracking'), async (re
     const orderId = req.params.orderId;
     const { status, location, notes } = req.body;
 
-    const validStatuses = ['pending', 'assigned', 'in_transit', 'delivered', 'completed', 'cancelled'];
+    const validStatuses = ['pending', 'assigned', 'in_transit', 'delivered', 'completed', 'cancelled', 'delayed'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }

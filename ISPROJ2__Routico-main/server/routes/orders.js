@@ -182,7 +182,7 @@ router.put('/:orderId/status', requirePerm('update_order_status'), async (req, r
     const orderId = req.params.orderId;
     const { status } = req.body;
 
-    const validStatuses = ['pending', 'assigned', 'in_transit', 'delivered', 'completed', 'cancelled'];
+    const validStatuses = ['pending', 'assigned', 'in_transit', 'delivered', 'completed', 'cancelled', 'delayed'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
     }
@@ -191,7 +191,8 @@ router.put('/:orderId/status', requirePerm('update_order_status'), async (req, r
     const validTransitions = {
       pending: ['assigned', 'cancelled'],
       assigned: ['in_transit', 'cancelled'],
-      in_transit: ['delivered', 'cancelled'],
+      in_transit: ['delivered', 'cancelled', 'delayed'],
+      delayed: ['in_transit', 'delivered', 'cancelled'],
       delivered: ['completed'],
       completed: [],   // terminal state
       cancelled: []    // terminal state

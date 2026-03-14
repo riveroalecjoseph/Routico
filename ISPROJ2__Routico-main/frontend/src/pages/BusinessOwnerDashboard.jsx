@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import BusinessOwnerBilling from '../components/BusinessOwnerBilling';
 import BusinessOwnerCharts from '../components/BusinessOwnerCharts';
@@ -9,65 +8,71 @@ import BusinessOwnerIssues from '../components/BusinessOwnerIssues';
 import BusinessOwnerSettings from '../components/BusinessOwnerSettings';
 import BusinessOwnerFleet from '../components/BusinessOwnerFleet';
 import BusinessOwnerReports from '../components/BusinessOwnerReports';
-import Footer from '../components/Footer';
-import Header from '../components/Header';
 
 const BusinessOwnerDashboard = () => {
-  const { user, getToken } = useAuth();
+  const { user, getToken, logout } = useAuth();
   const [activeTab, setActiveTab] = useState('overview');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const [logo, setLogo] = useState(null);
   const [companyName, setCompanyName] = useState('Routico');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showNotifications, setShowNotifications] = useState(false);
+  const notificationRef = useRef(null);
   const [stats, setStats] = useState({
     totalOrders: 0,
     activeDrivers: 0,
     completedDeliveries: 0,
+    activeDeliveries: 0,
+    delayedDeliveries: 0,
     monthlyRevenue: 0,
     subscriptionStatus: 'pending'
   });
 
   const [recentOrders, setRecentOrders] = useState([]);
+  const [drivers, setDrivers] = useState([]);
   const [error, setError] = useState(null);
 
+  // Close notification dropdown on outside click
   useEffect(() => {
-    // Load logo from localStorage on mount
+    const handleClickOutside = (e) => {
+      if (notificationRef.current && !notificationRef.current.contains(e.target)) {
+        setShowNotifications(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
     const savedLogo = localStorage.getItem('companyLogo');
     const savedName = localStorage.getItem('companyName');
+    if (savedLogo) setLogo(savedLogo);
+    if (savedName) setCompanyName(savedName);
 
-    if (savedLogo) {
-      setLogo(savedLogo);
-    }
-    if (savedName) {
-      setCompanyName(savedName);
-    }
-
-    // Listen for logo updates
     const handleLogoUpdate = (event) => {
-      if (event.detail.logo) {
-        setLogo(event.detail.logo);
-      } else {
-        setLogo(null);
-      }
-      if (event.detail.companyName) {
-        setCompanyName(event.detail.companyName);
-      }
+      if (event.detail.logo) setLogo(event.detail.logo);
+      else setLogo(null);
+      if (event.detail.companyName) setCompanyName(event.detail.companyName);
     };
 
-    // Listen for driver updates
-    const handleDriversUpdate = (event) => {
-      fetchDashboardData();
-    };
+    const handleDriversUpdate = () => fetchDashboardData();
+    const handleOrdersUpdate = () => fetchDashboardData();
 
     window.addEventListener('logoUpdated', handleLogoUpdate);
     window.addEventListener('driversUpdated', handleDriversUpdate);
-
-    // Fetch dashboard data
+    window.addEventListener('ordersUpdated', handleOrdersUpdate);
     fetchDashboardData();
+
+    // Auto-refresh every 30 seconds so stats stay up to date
+    const pollInterval = setInterval(() => {
+      fetchDashboardData();
+    }, 30000);
 
     return () => {
       window.removeEventListener('logoUpdated', handleLogoUpdate);
       window.removeEventListener('driversUpdated', handleDriversUpdate);
+      window.removeEventListener('ordersUpdated', handleOrdersUpdate);
+      clearInterval(pollInterval);
     };
   }, [user]);
 
@@ -75,9 +80,7 @@ const BusinessOwnerDashboard = () => {
     setLoading(true);
     setError(null);
     try {
-      // Fetch dashboard statistics - using test endpoint for now
       const statsResponse = await fetch('http://localhost:3001/api/auth/business-dashboard-stats-test');
-
       let statsData = {
         totalOrders: 0,
         activeDrivers: 0,
@@ -90,7 +93,6 @@ const BusinessOwnerDashboard = () => {
         statsData = await statsResponse.json();
       }
 
-      // Fetch active drivers count from API
       if (user) {
         try {
           const token = getToken();
@@ -100,6 +102,7 @@ const BusinessOwnerDashboard = () => {
           if (driversResponse.ok) {
             const driversData = await driversResponse.json();
             statsData.activeDrivers = driversData.filter(d => d.status === 'active').length;
+            setDrivers(driversData.slice(0, 5));
           }
         } catch (e) {
           console.error('Error fetching drivers:', e);
@@ -108,7 +111,6 @@ const BusinessOwnerDashboard = () => {
 
       setStats(statsData);
 
-      // Fetch recent orders from the real orders API
       if (user) {
         const token = getToken();
         const ordersResponse = await fetch('http://localhost:3001/api/orders', {
@@ -117,16 +119,15 @@ const BusinessOwnerDashboard = () => {
 
         if (ordersResponse.ok) {
           const ordersData = await ordersResponse.json();
-          // Update total orders stat from real data
           statsData.totalOrders = ordersData.length;
           statsData.completedDeliveries = ordersData.filter(o => o.order_status === 'completed').length;
-          // Calculate monthly revenue from delivery fees of current month's orders
+          statsData.activeDeliveries = ordersData.filter(o => o.order_status === 'in_transit').length;
+          statsData.delayedDeliveries = ordersData.filter(o => o.order_status === 'delayed' || o.order_status === 'failed').length;
           const currentMonth = new Date().toISOString().slice(0, 7);
           statsData.monthlyRevenue = ordersData
             .filter(o => o.order_created_at && o.order_created_at.startsWith(currentMonth))
             .reduce((sum, o) => sum + (parseFloat(o.delivery_fee) || 0), 0);
           setStats({ ...statsData });
-          // Show the 5 most recent orders
           setRecentOrders(ordersData.slice(0, 5));
         } else {
           setRecentOrders([]);
@@ -135,12 +136,12 @@ const BusinessOwnerDashboard = () => {
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
       setError('Failed to load dashboard data. Please try again.');
-
-      // Fallback to default values if API fails
       setStats({
         totalOrders: 0,
         activeDrivers: 0,
         completedDeliveries: 0,
+        activeDeliveries: 0,
+        delayedDeliveries: 0,
         monthlyRevenue: 0,
         subscriptionStatus: 'pending'
       });
@@ -150,75 +151,89 @@ const BusinessOwnerDashboard = () => {
     }
   };
 
-
   const menuItems = [
-    { id: 'overview', label: 'Overview', icon: 'home' },
-    { id: 'orders', label: 'Orders', icon: 'orders' },
+    { id: 'overview', label: 'Dashboard', icon: 'dashboard' },
+    { id: 'orders', label: 'Delivery Orders', icon: 'orders' },
+    { id: 'routes', label: 'Route Optimization', icon: 'route' },
+    { id: 'charts', label: 'Tracking', icon: 'tracking' },
     { id: 'drivers', label: 'Drivers', icon: 'drivers' },
-    { id: 'fleet', label: 'Fleet Management', icon: 'fleet' },
-    { id: 'billing', label: 'Billing & Payments', icon: 'credit-card' },
-    { id: 'charts', label: 'Analytics & Charts', icon: 'chart' },
-    { id: 'reports', label: 'Reports', icon: 'reports' },
-    { id: 'issues', label: 'Issues', icon: 'issues' },
-    { id: 'settings', label: 'Settings', icon: 'settings' }
+    { id: 'fleet', label: 'Trucks', icon: 'trucks' },
   ];
 
-  // Section grouping for sidebar
-  const sidebarSections = [
-    { label: 'GENERAL', items: ['overview'] },
-    { label: 'MANAGEMENT', items: ['orders', 'drivers', 'fleet'] },
-    { label: 'FINANCE', items: ['billing', 'charts', 'reports'] },
-    { label: 'OTHER', items: ['issues', 'settings'] }
+  const supportItems = [
+    { id: 'issues', label: 'Issues', icon: 'issues' },
+    { id: 'reports', label: 'Reports', icon: 'reports' },
+    { id: 'billing', label: 'Billing', icon: 'billing' },
+    { id: 'settings', label: 'Admin Panel', icon: 'settings' },
+  ];
+
+  const allMenuItems = [
+    { id: 'overview', label: 'Dashboard', icon: 'dashboard' },
+    { id: 'orders', label: 'Delivery Orders', icon: 'orders' },
+    { id: 'routes', label: 'Route Optimization', icon: 'route' },
+    { id: 'fleet', label: 'Trucks', icon: 'trucks' },
+    { id: 'charts', label: 'Tracking', icon: 'tracking' },
+    { id: 'drivers', label: 'Drivers', icon: 'drivers' },
+    { id: 'issues', label: 'Issues', icon: 'issues' },
+    { id: 'reports', label: 'Reports', icon: 'reports' },
+    { id: 'billing', label: 'Billing', icon: 'billing' },
+    { id: 'settings', label: 'Settings', icon: 'settings' },
   ];
 
   const getIcon = (iconType) => {
     switch (iconType) {
-      case 'home':
+      case 'dashboard':
         return (
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-          </svg>
-        );
-      case 'credit-card':
-        return (
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-          </svg>
-        );
-      case 'chart':
-        return (
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
           </svg>
         );
       case 'orders':
         return (
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+          </svg>
+        );
+      case 'route':
+        return (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+          </svg>
+        );
+      case 'tracking':
+        return (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
           </svg>
         );
       case 'drivers':
         return (
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2" />
+          </svg>
+        );
+      case 'trucks':
+        return (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
           </svg>
         );
       case 'issues':
         return (
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-5 h-5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          </svg>
-        );
-      case 'fleet':
-        return (
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
           </svg>
         );
       case 'reports':
         return (
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+        );
+      case 'billing':
+        return (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
           </svg>
         );
       case 'settings':
@@ -232,426 +247,653 @@ const BusinessOwnerDashboard = () => {
     }
   };
 
+  const delayedOrders = stats.delayedDeliveries || 0;
+  const inTransitOrders = stats.activeDeliveries || 0;
+
   return (
-    <div className="min-h-screen flex bg-[#0a0f1a]">
+    <div className="flex min-h-screen overflow-hidden bg-[#111621]">
       {/* Sidebar */}
-      <div className={`${sidebarOpen ? 'w-64' : 'w-20'} bg-[#0c1222] transition-all duration-300 ease-in-out flex flex-col sticky top-0 h-screen overflow-hidden border-r border-gray-800/40`}>
-        {/* Sidebar Header - Logo Section */}
-        <div className="flex items-center justify-between px-4 py-5 flex-shrink-0">
-          {sidebarOpen && (
-            <div className="flex items-center space-x-3 flex-1">
-              {logo ? (
-                <>
-                  <img src={logo} alt={companyName} className="h-9 w-9 object-contain rounded-lg" />
-                  <div className="flex-1 min-w-0">
-                    <h2 className="text-sm font-bold text-white truncate">{companyName}</h2>
-                    <p className="text-[11px] text-gray-500">Business Portal</p>
-                  </div>
-                </>
-              ) : (
-                <div className="flex items-center space-x-3">
-                  <div className="w-9 h-9 bg-blue-600 rounded-lg flex items-center justify-center">
-                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                  </div>
-                  <div>
-                    <h2 className="text-sm font-bold text-white">Routico</h2>
-                    <p className="text-[11px] text-gray-500">Business Portal</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          <button
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="text-gray-500 hover:text-gray-300 transition-colors flex-shrink-0"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
+      <aside className="w-64 border-r border-slate-800 bg-slate-900 flex flex-col shrink-0">
+        {/* Logo */}
+        <div className="p-6 flex flex-col gap-1">
+          <div className="flex items-center gap-2 text-[#2463eb]">
+            {logo ? (
+              <img src={logo} alt={companyName} className="h-8 w-8 object-contain rounded-lg" />
+            ) : (
+              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+              </svg>
+            )}
+            <h1 className="text-xl font-bold tracking-tight text-white">{companyName}</h1>
+          </div>
+          <p className="text-xs text-slate-500 font-medium uppercase tracking-wider">Logistics Management</p>
         </div>
 
-        {/* Navigation Menu with Section Groups */}
-        <nav className="flex-1 px-3 pb-4 overflow-y-auto">
-          {sidebarSections.map((section) => (
-            <div key={section.label}>
-              {sidebarOpen && (
-                <p className="text-[10px] font-semibold tracking-widest text-gray-600 uppercase px-4 mb-2 mt-6">
-                  {section.label}
-                </p>
-              )}
-              {!sidebarOpen && <div className="mt-4" />}
-              <div className="space-y-1">
-                {section.items.map((itemId) => {
-                  const item = menuItems.find(m => m.id === itemId);
-                  if (!item) return null;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => setActiveTab(item.id)}
-                      className={`w-full flex items-center space-x-3 px-4 py-2.5 rounded-lg transition-all duration-200 ${
-                        activeTab === item.id
-                          ? 'bg-blue-600/15 text-blue-400 border-r-2 border-blue-400'
-                          : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
-                      }`}
-                    >
-                      <span className="flex-shrink-0">
-                        {getIcon(item.icon)}
-                      </span>
-                      {sidebarOpen && (
-                        <span className="text-sm font-medium">{item.label}</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+        {/* Navigation */}
+        <nav className="flex-1 px-4 py-4 space-y-1 overflow-y-auto">
+          {menuItems.map((item) => {
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id + item.icon}
+                onClick={() => setActiveTab(item.id)}
+                className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-lg transition-colors text-sm font-medium ${
+                  isActive
+                    ? 'bg-[#2463eb] text-white'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                }`}
+              >
+                <span className="flex-shrink-0">{getIcon(item.icon)}</span>
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+
+          {/* Support & Ops Section */}
+          <div className="pt-4 pb-2">
+            <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Support & Ops</p>
+          </div>
+          {supportItems.map((item) => {
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-lg transition-colors text-sm font-medium ${
+                  isActive
+                    ? 'bg-[#2463eb] text-white'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                }`}
+              >
+                <span className="flex-shrink-0">{getIcon(item.icon)}</span>
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
         </nav>
 
         {/* User Info at Bottom */}
-        <div className="p-4 border-t border-gray-800/40 flex-shrink-0">
-          <div className="flex items-center space-x-3">
-            <div className="relative">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 p-[2px]">
-                <div className="w-full h-full bg-[#0c1222] rounded-full flex items-center justify-center">
-                  <span className="text-sm font-semibold text-white">
-                    {user?.email?.charAt(0).toUpperCase()}
-                  </span>
-                </div>
-              </div>
-              <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 rounded-full border-2 border-[#0c1222]"></div>
+        <div className="p-4 border-t border-slate-800">
+          <div className="flex items-center gap-3 px-3 py-2 bg-slate-800/50 rounded-xl">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center flex-shrink-0">
+              <span className="text-xs font-semibold text-white">
+                {user?.email?.charAt(0).toUpperCase()}
+              </span>
             </div>
-            {sidebarOpen && (
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-white truncate">
-                  {user?.email}
-                </p>
-                <p className="text-xs text-gray-500">Business Owner</p>
-              </div>
-            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-white truncate">{user?.email}</p>
+              <p className="text-[10px] text-slate-500 truncate">Business Owner</p>
+            </div>
+            <button
+              onClick={async () => { await logout(); window.location.href = '/login'; }}
+              title="Sign out"
+              className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-700 rounded-lg transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+            </button>
           </div>
         </div>
-      </div>
+      </aside>
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-h-screen bg-[#0a0f1a]">
-        {/* Header */}
-        <Header />
-
-        {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="p-6 lg:p-8">
-            {/* Page Header */}
-            <div className="mb-8">
-              <h1 className="text-2xl font-bold text-white">
-                {menuItems.find(item => item.id === activeTab)?.label || 'Business Dashboard'}
-              </h1>
-              <p className="mt-1 text-sm text-gray-500">
-                Welcome back, {user?.email}! Manage your trucking operations efficiently.
-              </p>
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col h-screen overflow-y-auto">
+        {/* Sticky Header */}
+        <header className="sticky top-0 z-10 flex items-center justify-between px-8 py-4 bg-slate-900/80 backdrop-blur-md border-b border-slate-800">
+          <div className="flex items-center gap-4">
+            <h2 className="text-xl font-bold text-white">
+              {allMenuItems.find(item => item.id === activeTab)?.label || 'Dashboard'}
+            </h2>
+            {/* Search */}
+            <div className="relative w-72">
+              <svg className="w-5 h-5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                placeholder="Search tracking, orders..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && searchQuery.trim()) {
+                    const match = allMenuItems.find(item =>
+                      item.label.toLowerCase().includes(searchQuery.toLowerCase())
+                    );
+                    if (match) { setActiveTab(match.id); setSearchQuery(''); }
+                  }
+                }}
+                className="w-full pl-10 pr-4 py-2 bg-slate-800 border-none rounded-xl text-sm text-slate-300 placeholder-slate-500 focus:ring-2 focus:ring-[#2463eb]/20 outline-none"
+              />
+              {searchQuery && (
+                <div className="absolute top-full left-0 mt-1 w-full bg-slate-800 border border-slate-700 rounded-xl shadow-xl z-50 overflow-hidden">
+                  {allMenuItems
+                    .filter(item => item.label.toLowerCase().includes(searchQuery.toLowerCase()))
+                    .map(item => (
+                      <button
+                        key={item.id}
+                        onClick={() => { setActiveTab(item.id); setSearchQuery(''); }}
+                        className="w-full text-left px-4 py-2.5 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-colors flex items-center gap-2"
+                      >
+                        <span className="w-4 h-4">{getIcon(item.icon)}</span>
+                        {item.label}
+                      </button>
+                    ))
+                  }
+                  {allMenuItems.filter(item => item.label.toLowerCase().includes(searchQuery.toLowerCase())).length === 0 && (
+                    <div className="px-4 py-2.5 text-sm text-slate-500">No results found</div>
+                  )}
+                </div>
+              )}
             </div>
-
-            {/* Tab Content */}
-            {activeTab === 'overview' && (
-              <>
-                {/* Error Display */}
-                {error && (
-                  <div className="bg-red-900/30 border border-red-800/50 rounded-xl p-4 mb-6">
-                    <div className="flex">
-                      <div className="flex-shrink-0">
-                        <svg className="h-5 w-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                        </svg>
-                      </div>
-                      <div className="ml-3">
-                        <h3 className="text-sm font-medium text-red-200">Error</h3>
-                        <div className="mt-1 text-sm text-red-300">
-                          <p>{error}</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+          </div>
+          <div className="flex items-center gap-3">
+            {/* Notification Bell */}
+            <div className="relative" ref={notificationRef}>
+              <button
+                onClick={() => setShowNotifications(!showNotifications)}
+                className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:bg-[#2463eb]/10 hover:text-[#2463eb] transition-all relative"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                {recentOrders.length > 0 && (
+                  <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-slate-900"></span>
                 )}
-
-                {/* Stats Grid */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-5 mb-8">
-                  {/* Total Orders Card */}
-                  <div className="bg-[#111827] border border-gray-800/60 rounded-2xl p-5">
-                    <div className="flex items-center space-x-4">
-                      <div className="w-12 h-12 rounded-xl bg-blue-500/15 flex items-center justify-center flex-shrink-0">
-                        <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                        </svg>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500 font-medium">Total Orders</p>
-                        <p className="text-2xl font-bold text-white mt-0.5">
-                          {loading ? '...' : stats.totalOrders}
-                        </p>
-                      </div>
-                    </div>
+              </button>
+              {showNotifications && (
+                <div className="absolute right-0 top-full mt-2 w-80 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50">
+                  <div className="p-4 border-b border-slate-700">
+                    <h3 className="text-sm font-semibold text-white">Notifications</h3>
                   </div>
-
-                  {/* Active Drivers Card */}
-                  <div className="bg-[#111827] border border-gray-800/60 rounded-2xl p-5">
-                    <div className="flex items-center space-x-4">
-                      <div className="w-12 h-12 rounded-xl bg-green-500/15 flex items-center justify-center flex-shrink-0">
-                        <svg className="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                        </svg>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500 font-medium">Active Drivers</p>
-                        <p className="text-2xl font-bold text-white mt-0.5">
-                          {loading ? '...' : stats.activeDrivers}
-                        </p>
-                      </div>
-                    </div>
+                  <div className="max-h-64 overflow-y-auto">
+                    {recentOrders.length > 0 ? (
+                      recentOrders.slice(0, 5).map((order) => (
+                        <button
+                          key={order.order_id}
+                          onClick={() => { setActiveTab('orders'); setShowNotifications(false); }}
+                          className="w-full text-left px-4 py-3 hover:bg-slate-700/50 transition-colors border-b border-slate-700/50 last:border-0"
+                        >
+                          <p className="text-sm text-white font-medium">{order.customer_name || 'Order'}</p>
+                          <p className="text-xs text-slate-400 mt-0.5">Status: {order.order_status}</p>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="px-4 py-6 text-center text-sm text-slate-500">No new notifications</div>
+                    )}
                   </div>
-
-                  {/* Completed Deliveries Card */}
-                  <div className="bg-[#111827] border border-gray-800/60 rounded-2xl p-5">
-                    <div className="flex items-center space-x-4">
-                      <div className="w-12 h-12 rounded-xl bg-purple-500/15 flex items-center justify-center flex-shrink-0">
-                        <svg className="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500 font-medium">Completed</p>
-                        <p className="text-2xl font-bold text-white mt-0.5">
-                          {loading ? '...' : stats.completedDeliveries}
-                        </p>
-                      </div>
+                  {recentOrders.length > 0 && (
+                    <div className="p-3 border-t border-slate-700">
+                      <button
+                        onClick={() => { setActiveTab('orders'); setShowNotifications(false); }}
+                        className="w-full text-center text-xs font-semibold text-blue-400 hover:text-blue-300 transition-colors"
+                      >
+                        View all orders
+                      </button>
                     </div>
-                  </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="w-px h-6 bg-slate-700 mx-1"></div>
+            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center border-2 border-[#2463eb]/20">
+              <span className="text-sm font-semibold text-white">
+                {user?.email?.charAt(0).toUpperCase()}
+              </span>
+            </div>
+          </div>
+        </header>
 
-                  {/* Monthly Revenue Card */}
-                  <div className="bg-[#111827] border border-gray-800/60 rounded-2xl p-5">
-                    <div className="flex items-center space-x-4">
-                      <div className="w-12 h-12 rounded-xl bg-orange-500/15 flex items-center justify-center flex-shrink-0">
-                        <svg className="w-6 h-6 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        {/* Content */}
+        <div className="p-8 space-y-8">
+          {/* Tab Content */}
+          {activeTab === 'overview' && (
+            <>
+              {/* Error Display */}
+              {error && (
+                <div className="bg-red-900/30 border border-red-800/50 rounded-xl p-4">
+                  <div className="flex items-center gap-3">
+                    <svg className="h-5 w-5 text-red-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <p className="text-sm text-red-300">{error}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Stats Grid - 4 cards */}
+              <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                {/* Total Orders */}
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-sm font-medium text-slate-400">Total Orders</p>
+                      <h3 className="text-3xl font-bold mt-1 text-white">
+                        {loading ? '...' : stats.totalOrders.toLocaleString()}
+                      </h3>
+                      <p className="text-xs text-green-500 font-medium mt-2 flex items-center gap-1">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                         </svg>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500 font-medium">Revenue</p>
-                        <p className="text-2xl font-bold text-white mt-0.5">
-                          {loading ? '...' : `₱${stats.monthlyRevenue.toLocaleString()}`}
-                        </p>
-                      </div>
+                        All time total
+                      </p>
+                    </div>
+                    <div className="p-3 bg-[#2463eb]/10 rounded-xl text-[#2463eb]">
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
                     </div>
                   </div>
                 </div>
 
-                {/* Main Content Grid - 2/3 + 1/3 */}
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-                  {/* Recent Orders */}
-                  <div className="xl:col-span-2">
-                    <div className="bg-[#111827] border border-gray-800/60 rounded-2xl">
-                      <div className="px-6 py-5">
-                        <div className="flex items-center justify-between mb-5">
-                          <h3 className="text-base font-semibold text-white">
-                            Recent Orders
-                          </h3>
-                          <button
-                            onClick={() => setActiveTab('orders')}
-                            className="text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors cursor-pointer"
+                {/* Active Deliveries */}
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-sm font-medium text-slate-400">Active Deliveries</p>
+                      <h3 className="text-3xl font-bold mt-1 text-white">
+                        {loading ? '...' : inTransitOrders}
+                      </h3>
+                      <p className="text-xs text-[#2463eb] font-medium mt-2 flex items-center gap-1">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        In progress
+                      </p>
+                    </div>
+                    <div className="p-3 bg-blue-900/30 rounded-xl text-blue-400">
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Delayed Deliveries */}
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-sm font-medium text-slate-400">Delayed Deliveries</p>
+                      <h3 className="text-3xl font-bold mt-1 text-red-500">
+                        {loading ? '...' : delayedOrders}
+                      </h3>
+                      <p className="text-xs text-red-400 font-medium mt-2 flex items-center gap-1">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01" />
+                        </svg>
+                        Attention required
+                      </p>
+                    </div>
+                    <div className="p-3 bg-red-900/30 rounded-xl text-red-500">
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Available Drivers */}
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-sm font-medium text-slate-400">Available Drivers</p>
+                      <h3 className="text-3xl font-bold mt-1 text-white">
+                        {loading ? '...' : stats.activeDrivers}
+                      </h3>
+                      <p className="text-xs text-slate-500 font-medium mt-2 flex items-center gap-1">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                        Active drivers
+                      </p>
+                    </div>
+                    <div className="p-3 bg-green-900/30 rounded-xl text-green-500">
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* Middle Section: Chart + Delivery Status */}
+              <section className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* Delivery Volume Chart */}
+                <div className="lg:col-span-2 bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-sm">
+                  <div className="flex items-center justify-between mb-6">
+                    <h4 className="font-bold text-lg text-white">Delivery Volume Overview</h4>
+                  </div>
+                  {(() => {
+                    const chartData = [
+                      { day: 'Mon', value: 5 },
+                      { day: 'Tue', value: 12 },
+                      { day: 'Wed', value: 18 },
+                      { day: 'Thu', value: 14 },
+                      { day: 'Fri', value: 22 },
+                      { day: 'Sat', value: 26 },
+                      { day: 'Sun', value: 20 },
+                    ];
+                    const maxVal = Math.max(...chartData.map(d => d.value));
+                    const points = chartData.map((d, i) => ({
+                      x: 8 + (i * (84 / 6)),
+                      y: 85 - (d.value / maxVal) * 65,
+                      ...d
+                    }));
+                    const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
+                    const areaPath = `${linePath} L${points[points.length-1].x},90 L${points[0].x},90 Z`;
+                    return (
+                      <div className="h-[240px] w-full relative">
+                        <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                          <defs>
+                            <linearGradient id="grad1" x1="0%" y1="0%" x2="0%" y2="100%">
+                              <stop offset="0%" style={{ stopColor: '#2463eb', stopOpacity: 0.3 }} />
+                              <stop offset="100%" style={{ stopColor: '#2463eb', stopOpacity: 0.02 }} />
+                            </linearGradient>
+                          </defs>
+                          <line x1="8" y1="25" x2="92" y2="25" stroke="#1e293b" strokeWidth="0.3" />
+                          <line x1="8" y1="50" x2="92" y2="50" stroke="#1e293b" strokeWidth="0.3" />
+                          <line x1="8" y1="75" x2="92" y2="75" stroke="#1e293b" strokeWidth="0.3" />
+                          <path d={areaPath} fill="url(#grad1)" />
+                          <path d={linePath} fill="none" stroke="#2463eb" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        {/* Interactive data points as HTML overlays */}
+                        {points.map((p, i) => (
+                          <div
+                            key={i}
+                            className="absolute group"
+                            style={{ left: `${p.x}%`, top: `${p.y}%`, transform: 'translate(-50%, -50%)' }}
                           >
-                            View all
-                          </button>
+                            <div className="w-3 h-3 rounded-full border-2 border-[#2463eb] bg-slate-900 group-hover:bg-[#2463eb] group-hover:scale-150 transition-all cursor-pointer" />
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2.5 py-1 bg-slate-700 text-white text-xs font-bold rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap shadow-lg">
+                              {p.value} orders
+                              <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-700" />
+                            </div>
+                          </div>
+                        ))}
+                        {/* Day labels */}
+                        <div className="absolute bottom-0 left-0 w-full flex justify-between text-[10px] text-slate-400 px-[6%] pb-0 font-bold uppercase tracking-wider">
+                          {chartData.map(d => <span key={d.day}>{d.day}</span>)}
                         </div>
-                        {loading ? (
-                          <div className="space-y-4">
-                            {[1, 2, 3].map((i) => (
-                              <div key={i} className="animate-pulse flex items-center space-x-4">
-                                <div className="h-8 w-8 bg-gray-700/50 rounded-full"></div>
-                                <div className="flex-1 space-y-2">
-                                  <div className="h-4 bg-gray-700/50 rounded w-3/4"></div>
-                                  <div className="h-3 bg-gray-700/50 rounded w-1/2"></div>
-                                </div>
-                                <div className="h-6 w-16 bg-gray-700/50 rounded-full"></div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : recentOrders.length > 0 ? (
-                          <div className="flow-root">
-                            <ul className="-my-4 divide-y divide-gray-800/60">
-                              {recentOrders.map((order, index) => (
-                                <li key={order.order_id} className="py-3.5">
-                                  <div className="flex items-center space-x-4">
-                                    <div className="flex-shrink-0">
-                                      <div className="h-8 w-8 bg-blue-500/10 border border-blue-500/20 rounded-full flex items-center justify-center">
-                                        <span className="text-xs font-semibold text-blue-400">
-                                          {index + 1}
-                                        </span>
-                                      </div>
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-sm font-medium text-white truncate">
-                                        {order.customer_name || 'Customer'}
-                                      </p>
-                                      <p className="text-xs text-gray-500 truncate mt-0.5">
-                                        {order.drop_off_location}
-                                      </p>
-                                    </div>
-                                    <div className="flex-shrink-0">
-                                      <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium ${
-                                        order.order_status === 'completed' ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
-                                        order.order_status === 'in_transit' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
-                                        'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-                                      }`}>
-                                        {order.order_status}
-                                      </span>
-                                    </div>
-                                  </div>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        ) : (
-                          <div className="text-center py-10">
-                            <svg className="mx-auto h-10 w-10 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                            </svg>
-                            <h3 className="mt-3 text-sm font-medium text-gray-300">No recent orders</h3>
-                            <p className="mt-1 text-xs text-gray-500">Orders will appear here once you start receiving deliveries.</p>
-                          </div>
-                        )}
                       </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Delivery Status Donut */}
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-sm">
+                  <h4 className="font-bold text-lg text-white mb-6">Delivery Status</h4>
+                  <div className="relative h-[200px] flex items-center justify-center">
+                    <svg className="w-32 h-32 transform -rotate-90" viewBox="0 0 128 128">
+                      <circle className="text-slate-800" cx="64" cy="64" fill="transparent" r="50" stroke="currentColor" strokeWidth="12" />
+                      <circle className="text-[#2463eb]" cx="64" cy="64" fill="transparent" r="50" stroke="currentColor"
+                        strokeDasharray="314"
+                        strokeDashoffset={stats.totalOrders > 0 ? 314 - (314 * stats.completedDeliveries / stats.totalOrders) : 314}
+                        strokeWidth="12" />
+                      <circle className="text-red-500" cx="64" cy="64" fill="transparent" r="50" stroke="currentColor"
+                        strokeDasharray="314"
+                        strokeDashoffset={stats.totalOrders > 0 ? 314 - (314 * delayedOrders / stats.totalOrders) : 314}
+                        strokeWidth="12" />
+                    </svg>
+                    <div className="absolute flex flex-col items-center">
+                      <span className="text-2xl font-bold text-white">{loading ? '...' : stats.totalOrders}</span>
+                      <span className="text-[10px] uppercase text-slate-400 font-bold">Total</span>
+                    </div>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    <div className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="w-3 h-3 rounded-full bg-[#2463eb]"></span>
+                        <span className="text-slate-400">Delivered</span>
+                      </div>
+                      <span className="font-semibold text-white">{loading ? '...' : stats.completedDeliveries}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="w-3 h-3 rounded-full bg-slate-600"></span>
+                        <span className="text-slate-400">Pending</span>
+                      </div>
+                      <span className="font-semibold text-white">{loading ? '...' : stats.totalOrders - stats.completedDeliveries - delayedOrders}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="w-3 h-3 rounded-full bg-red-500"></span>
+                        <span className="text-slate-400">Delayed</span>
+                      </div>
+                      <span className="font-semibold text-white">{loading ? '...' : delayedOrders}</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* Bottom Section: Orders Table + Quick Actions + Drivers */}
+              <section className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div className="lg:col-span-2 space-y-8">
+                  {/* Recent Orders Table */}
+                  <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-sm overflow-hidden">
+                    <div className="p-6 border-b border-slate-800 flex items-center justify-between">
+                      <h4 className="font-bold text-lg text-white">Recent Delivery Orders</h4>
+                      <button onClick={() => setActiveTab('orders')} className="text-[#2463eb] text-sm font-semibold hover:underline">View All</button>
+                    </div>
+                    <div className="overflow-x-auto">
+                      {loading ? (
+                        <div className="p-6 space-y-4">
+                          {[1, 2, 3].map((i) => (
+                            <div key={i} className="animate-pulse flex items-center gap-4">
+                              <div className="h-4 bg-slate-700/50 rounded w-20"></div>
+                              <div className="h-4 bg-slate-700/50 rounded w-32"></div>
+                              <div className="h-4 bg-slate-700/50 rounded w-16"></div>
+                              <div className="h-4 bg-slate-700/50 rounded w-20"></div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : recentOrders.length > 0 ? (
+                        <table className="w-full text-left">
+                          <thead className="bg-slate-800/50 text-[10px] uppercase text-slate-400 font-bold tracking-widest">
+                            <tr>
+                              <th className="px-6 py-4">Order ID</th>
+                              <th className="px-6 py-4">Customer</th>
+                              <th className="px-6 py-4">Status</th>
+                              <th className="px-6 py-4">Location</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800">
+                            {recentOrders.map((order) => (
+                              <tr key={order.order_id}>
+                                <td className="px-6 py-4 text-sm font-medium text-white">#{order.order_id}</td>
+                                <td className="px-6 py-4 text-sm text-slate-300">{order.customer_name || 'Customer'}</td>
+                                <td className="px-6 py-4">
+                                  <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${
+                                    order.order_status === 'completed' ? 'bg-green-900/40 text-green-300' :
+                                    order.order_status === 'in_transit' ? 'bg-blue-900/40 text-blue-300' :
+                                    order.order_status === 'delayed' || order.order_status === 'failed' ? 'bg-red-900/40 text-red-300' :
+                                    'bg-yellow-900/40 text-yellow-300'
+                                  }`}>
+                                    {order.order_status === 'in_transit' ? 'In Transit' :
+                                     order.order_status === 'completed' ? 'Delivered' :
+                                     order.order_status}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 text-sm text-slate-500 truncate max-w-[200px]">{order.drop_off_location || '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <div className="text-center py-10">
+                          <svg className="mx-auto h-10 w-10 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                          </svg>
+                          <h3 className="mt-3 text-sm font-medium text-slate-300">No recent orders</h3>
+                          <p className="mt-1 text-xs text-slate-500">Orders will appear here once created.</p>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Right Column - Quick Actions + Account Status */}
-                  <div className="xl:col-span-1 space-y-5">
+                  {/* Quick Actions + Account Status */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Quick Actions */}
-                    <div className="bg-[#111827] border border-gray-800/60 rounded-2xl">
-                      <div className="px-6 py-5">
-                        <h3 className="text-base font-semibold text-white mb-4">
-                          Quick Actions
-                        </h3>
-                        <div className="space-y-2.5">
-                          <button
-                            onClick={() => setActiveTab('orders')}
-                            className="w-full flex items-center px-4 py-3 bg-[#1a2235] border border-gray-700/40 rounded-xl hover:bg-[#1e2a3f] transition-colors text-sm font-medium text-white"
-                          >
-                            <svg className="w-4 h-4 mr-3 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                            </svg>
-                            Create New Order
-                          </button>
-                          <button
-                            onClick={() => setActiveTab('drivers')}
-                            className="w-full flex items-center px-4 py-3 bg-[#1a2235] border border-gray-700/40 rounded-xl hover:bg-[#1e2a3f] transition-colors text-sm font-medium text-gray-300"
-                          >
-                            <svg className="w-4 h-4 mr-3 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                            </svg>
-                            Add Driver
-                          </button>
-                          <button
-                            onClick={() => setActiveTab('orders')}
-                            className="w-full flex items-center px-4 py-3 bg-[#1a2235] border border-gray-700/40 rounded-xl hover:bg-[#1e2a3f] transition-colors text-sm font-medium text-gray-300"
-                          >
-                            <svg className="w-4 h-4 mr-3 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-                            </svg>
-                            Optimize Routes
-                          </button>
-                          <button
-                            onClick={() => setActiveTab('charts')}
-                            className="w-full flex items-center px-4 py-3 bg-[#1a2235] border border-gray-700/40 rounded-xl hover:bg-[#1e2a3f] transition-colors text-sm font-medium text-gray-300"
-                          >
-                            <svg className="w-4 h-4 mr-3 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                            </svg>
-                            View Analytics
-                          </button>
-                        </div>
+                    <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-sm">
+                      <h4 className="font-bold text-lg text-white mb-4">Quick Actions</h4>
+                      <div className="grid grid-cols-2 gap-4">
+                        <button
+                          onClick={() => setActiveTab('orders')}
+                          className="flex flex-col items-center justify-center p-4 rounded-xl bg-slate-800 hover:bg-[#2463eb]/5 hover:text-[#2463eb] border border-transparent hover:border-[#2463eb]/20 transition-all gap-2 text-slate-300"
+                        >
+                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                          </svg>
+                          <span className="text-[10px] font-bold uppercase tracking-tight text-center leading-tight">Create Order</span>
+                        </button>
+                        <button
+                          onClick={() => setActiveTab('drivers')}
+                          className="flex flex-col items-center justify-center p-4 rounded-xl bg-slate-800 hover:bg-[#2463eb]/5 hover:text-[#2463eb] border border-transparent hover:border-[#2463eb]/20 transition-all gap-2 text-slate-300"
+                        >
+                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                          </svg>
+                          <span className="text-[10px] font-bold uppercase tracking-tight text-center leading-tight">Add Driver</span>
+                        </button>
+                        <button
+                          onClick={() => setActiveTab('fleet')}
+                          className="flex flex-col items-center justify-center p-4 rounded-xl bg-slate-800 hover:bg-[#2463eb]/5 hover:text-[#2463eb] border border-transparent hover:border-[#2463eb]/20 transition-all gap-2 text-slate-300"
+                        >
+                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                          </svg>
+                          <span className="text-[10px] font-bold uppercase tracking-tight text-center leading-tight">Add Truck</span>
+                        </button>
+                        <button
+                          onClick={() => setActiveTab('charts')}
+                          className="flex flex-col items-center justify-center p-4 rounded-xl bg-slate-800 hover:bg-[#2463eb]/5 hover:text-[#2463eb] border border-transparent hover:border-[#2463eb]/20 transition-all gap-2 text-slate-300"
+                        >
+                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                          </svg>
+                          <span className="text-[10px] font-bold uppercase tracking-tight text-center leading-tight">View Reports</span>
+                        </button>
                       </div>
                     </div>
 
                     {/* Account Status */}
-                    <div className="bg-[#111827] border border-gray-800/60 rounded-2xl">
-                      <div className="px-6 py-5">
-                        <h3 className="text-base font-semibold text-white mb-4">
-                          Account Status
-                        </h3>
-                        <div className="space-y-3.5">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm text-gray-500">Subscription</span>
-                            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium ${
-                              loading ? 'bg-gray-700/30 text-gray-400' :
-                              stats.subscriptionStatus === 'paid' ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-                            }`}>
-                              {loading ? 'Loading...' : stats.subscriptionStatus === 'paid' ? 'Paid' : 'Pending'}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm text-gray-500">Plan</span>
-                            <span className="text-sm font-medium text-white">
-                              {loading ? 'Loading...' : 'Routico Professional'}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm text-gray-500">Monthly Fee</span>
-                            <span className="text-sm font-medium text-white">
-                              {loading ? 'Loading...' : '₱2,000 + ₱10/delivery'}
-                            </span>
-                          </div>
+                    <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-sm">
+                      <h4 className="font-bold text-lg text-white mb-4">Account Status</h4>
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-slate-400">Subscription</span>
+                          <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                            loading ? 'bg-slate-700/30 text-slate-400' :
+                            stats.subscriptionStatus === 'paid' ? 'bg-green-900/40 text-green-300' : 'bg-yellow-900/40 text-yellow-300'
+                          }`}>
+                            {loading ? 'Loading...' : stats.subscriptionStatus === 'paid' ? 'Paid' : 'Pending'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-slate-400">Plan</span>
+                          <span className="text-sm font-medium text-white">
+                            {loading ? 'Loading...' : 'Routico Professional'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-slate-400">Monthly Fee</span>
+                          <span className="text-sm font-medium text-white">
+                            {loading ? 'Loading...' : '₱2,000 + ₱10/delivery'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-slate-400">Revenue</span>
+                          <span className="text-sm font-bold text-white">
+                            {loading ? 'Loading...' : `₱${stats.monthlyRevenue.toLocaleString()}`}
+                          </span>
                         </div>
                       </div>
                     </div>
                   </div>
                 </div>
-              </>
-            )}
 
-            {/* Charts Tab */}
-            {activeTab === 'charts' && (
-              <BusinessOwnerCharts stats={stats} loading={loading} error={error} />
-            )}
+                {/* Active Drivers Panel */}
+                <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-sm flex flex-col h-full">
+                  <div className="p-6 border-b border-slate-800 flex items-center justify-between">
+                    <h4 className="font-bold text-lg text-white">Active Drivers</h4>
+                    <span className="text-[10px] bg-slate-800 px-2 py-1 rounded font-bold text-slate-300">
+                      {loading ? '...' : `${stats.activeDrivers} Active`}
+                    </span>
+                  </div>
+                  <div className="p-6 space-y-5 flex-1 overflow-y-auto max-h-[500px]">
+                    {loading ? (
+                      <div className="space-y-4">
+                        {[1, 2, 3].map((i) => (
+                          <div key={i} className="animate-pulse flex items-center gap-4">
+                            <div className="w-10 h-10 bg-slate-700/50 rounded-full"></div>
+                            <div className="flex-1 space-y-2">
+                              <div className="h-4 bg-slate-700/50 rounded w-3/4"></div>
+                              <div className="h-3 bg-slate-700/50 rounded w-1/2"></div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : drivers.length > 0 ? (
+                      drivers.map((driver) => (
+                        <div key={driver.driver_id || driver.id} className="flex items-center gap-4">
+                          <div className="relative">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center">
+                              <span className="text-xs font-semibold text-white">
+                                {(driver.first_name || driver.email || 'D').charAt(0).toUpperCase()}
+                              </span>
+                            </div>
+                            <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-slate-900 ${
+                              driver.status === 'active' ? 'bg-green-500' : driver.status === 'on_delivery' ? 'bg-orange-500' : 'bg-red-500'
+                            }`}></span>
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-sm font-semibold text-white">
+                              {driver.first_name && driver.last_name ? `${driver.first_name} ${driver.last_name}` : driver.email}
+                            </p>
+                            <p className="text-[10px] text-slate-500">
+                              {driver.status === 'active' ? 'Available' : driver.status === 'on_delivery' ? 'On Delivery' : driver.status}
+                            </p>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-6">
+                        <p className="text-sm text-slate-500">No drivers yet</p>
+                        <button
+                          onClick={() => setActiveTab('drivers')}
+                          className="mt-2 text-xs text-[#2463eb] hover:underline font-medium"
+                        >
+                          Add your first driver
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="p-6 border-t border-slate-800">
+                    <button
+                      onClick={() => setActiveTab('drivers')}
+                      className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-bold uppercase tracking-widest transition-colors text-slate-300"
+                    >
+                      Manage All Drivers
+                    </button>
+                  </div>
+                </div>
+              </section>
+            </>
+          )}
 
-            {/* Orders Tab */}
-            {activeTab === 'orders' && (
-              <BusinessOwnerOrders />
-            )}
-
-            {/* Drivers Tab */}
-            {activeTab === 'drivers' && (
-              <BusinessOwnerDrivers />
-            )}
-
-            {/* Fleet Management Tab */}
-            {activeTab === 'fleet' && (
-              <BusinessOwnerFleet />
-            )}
-
-            {/* Billing Tab */}
-            {activeTab === 'billing' && (
-              <BusinessOwnerBilling />
-            )}
-
-            {/* Reports Tab */}
-            {activeTab === 'reports' && (
-              <BusinessOwnerReports />
-            )}
-
-            {/* Issues Tab */}
-            {activeTab === 'issues' && (
-              <BusinessOwnerIssues />
-            )}
-
-            {/* Settings Tab */}
-            {activeTab === 'settings' && (
-              <BusinessOwnerSettings />
-            )}
-          </div>
+          {activeTab === 'charts' && (
+            <BusinessOwnerCharts stats={stats} loading={loading} error={error} />
+          )}
+          {activeTab === 'orders' && <BusinessOwnerOrders />}
+          {activeTab === 'routes' && <BusinessOwnerOrders routeOptimizationOnly />}
+          {activeTab === 'drivers' && <BusinessOwnerDrivers />}
+          {activeTab === 'fleet' && <BusinessOwnerFleet />}
+          {activeTab === 'billing' && <BusinessOwnerBilling />}
+          {activeTab === 'reports' && <BusinessOwnerReports />}
+          {activeTab === 'issues' && <BusinessOwnerIssues />}
+          {activeTab === 'settings' && <BusinessOwnerSettings />}
         </div>
-      </div>
+      </main>
     </div>
   );
 };
